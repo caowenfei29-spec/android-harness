@@ -312,3 +312,18 @@ def _load_agent_helpers():
 
 
 _load_agent_helpers()
+
+# Task-level helpers are imported last to avoid a circular import:
+# task.py depends on helpers, so helpers must be fully defined first.
+from . import task as _task
+
+# re-export task-level helpers so scripts can build/run tasks directly
+run_task = _task.run_task
+step_open = _task.step_open
+step_tap = _task.step_tap
+step_tap_id = _task.step_tap_id
+step_type = _task.step_type
+step_type_unicode = _task.step_type_unicode
+step_wait = _task.step_wait
+step_ask = _task.step_ask
+plan_from_goal = _task.plan_from_goal

@@ -87,8 +87,9 @@ so `tap_text("设置")` is exact, not approximate. The hands are the same idea
   - `adb.py` — adb wrapper, input primitives, UI dump, connection state
   - `ui.py` — parse the uiautomator XML into tappable node dicts
   - `helpers.py` — the primitives pre-imported into scripts
+  - `task.py` — task-layer: step builders + `run_task` (stops at `ask`)
   - `admin.py` — `--doctor`
-  - `run.py` — the CLI (`exec` stdin with helpers in scope)
+  - `run.py` — the CLI (`exec` stdin, `task` subcommand, with helpers in scope)
 - `agent-workspace/agent_helpers.py` — helper code the agent edits; auto-loaded
   into every script's namespace
 

@@ -60,6 +60,28 @@ settings, installing apps. Navigating and reading for the user's own task is
 fine, but don't linger in personal content (Messages, Photos, Mail) beyond what
 the task needs.
 
+## Task layer (one-line goals)
+
+Prefer the task layer over hand-written loops for simple, linear flows. A task
+is a list of steps; the harness drives the phone and **stops at `ask`**:
+
+```python
+run_task([
+    step_open("微信"),
+    step_tap("文件传输助手"),
+    step_type("hello"),
+    step_ask("确认发送?"),   # halts here; never sends without you
+])
+```
+
+Step builders: `step_open`, `step_tap`, `step_tap_id`, `step_type`,
+`step_type_unicode`, `step_wait`, `step_ask`. `step_ask` is mandatory before
+any outward action — `run_task` returns control rather than acting.
+
+`plan_from_goal("Open 微信")` maps a few plain-language goals to steps; it
+returns `None` for open-ended or outward goals (send/post/buy/delete) so you
+hand those to a real model instead of auto-planning them.
+
 ## Connection is the user's job
 
 The harness never connects the phone for you. Plugging in USB, enabling USB
