@@ -105,12 +105,18 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(body, ensure_ascii=False)
             ctype = "application/json"
         data = body.encode("utf-8") if isinstance(body, str) else body
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+        except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
+            # Client closed the connection early (e.g. a proxy dropping the
+            # local loopback, or the browser navigating away). This is normal
+            # network behaviour, not a server fault — don't dump a traceback.
+            pass
 
     def do_GET(self):
         path = self.path.split("?")[0]
