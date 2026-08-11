@@ -4,6 +4,8 @@ Control a **real Android phone** from an LLM agent — no app changes, no root, 
 emulator. It's a thin, editable harness modeled on `ShawnPana/phone-harness`,
 but adapted to Android where the transport is cleaner.
 
+Repo: https://github.com/caowenfei29-spec/android-harness
+
 The agent drives the phone through ADB:
 - **Eyes** — `uiautomator dump` gives the real UI hierarchy (a DOM), not OCR.
   Every node carries its own text, content-desc, class, and tap-ready bounds.
