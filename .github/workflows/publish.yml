@@ -7,10 +7,10 @@ on:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
-    # IMPORTANT: never commit a token. The maintainer adds PYPI_API_TOKEN
-    # as a GitHub Actions *secret* (Settings -> Secrets and variables).
-    # This workflow only runs when a release is published, and only with
-    # that secret present in the repo.
+    # Only runs when a PyPI API token secret is configured. Without it the job
+    # is skipped (not failed), so tagging without publishing doesn't break CI.
+    # Add PYPI_API_TOKEN under Settings -> Secrets before your first release.
+    if: ${{ secrets.PYPI_API_TOKEN != '' }}
     environment: pypi
     permissions:
       id-token: write
