@@ -20,16 +20,22 @@ the user's number/2FA, checking how something looks on the phone.
 ## Usage
 
 ```bash
-android-harness <<'PY'
-print(screen_info())
-PY
+android-harness plan "Open 微信" > plan.json
+android-harness execute plan.json
 ```
 
-- Invoke as `android-harness`. Use heredocs for multi-line commands.
-- Helpers are pre-imported. All coordinates are device pixels.
+- `plan` emits JSON and never executes model output.
+- `execute` accepts only a strict JSON Task Plan. Use `--confirm` with a plan
+  file when risky steps are intentional and have been reviewed.
+- `--unsafe-script` is the explicit legacy escape hatch for trusted Python;
+  it bypasses policy and prints a warning.
 - `ensure_device()` gates every task on the phone being connected.
 
 ## Screen Workflow
+
+The helper calls below are the trusted programmatic API used by Executor and
+explicit unsafe scripts. Agent-generated work should express them as Task Plan
+steps so policy and confirmation remain in the path.
 
 - Prefer `dump_nodes()` / `find_text()` / `tap_text()` over screenshots. The UI
   hierarchy is exact: every visible label comes back with a tap-ready center
@@ -62,25 +68,26 @@ the task needs.
 
 ## Task layer (one-line goals)
 
-Prefer the task layer over hand-written loops for simple, linear flows. A task
-is a list of steps; the harness drives the phone and **stops at `ask`**:
+The historical builders remain, but `run_task` converts them to a strict plan
+and routes them through policy:
 
 ```python
 run_task([
     step_open("微信"),
+    step_ask("确认打开文件传输助手?"),
     step_tap("文件传输助手"),
-    step_type("hello"),
-    step_ask("确认发送?"),   # halts here; never sends without you
 ])
 ```
 
-Step builders: `step_open`, `step_tap`, `step_tap_id`, `step_type`,
-`step_type_unicode`, `step_wait`, `step_ask`. `step_ask` is mandatory before
-any outward action — `run_task` returns control rather than acting.
+Step builders remain: `step_open`, `step_tap`, `step_tap_id`, `step_type`,
+`step_type_unicode`, `step_wait`, `step_ask`. `step_ask` provides the prompt
+for the next risky step; it is not authorization. Without a confirmer, the
+risky step fails before ADB. The safe CLI is the recommended human flow.
 
-`plan_from_goal("Open 微信")` maps a few plain-language goals to steps; it
-returns `None` for open-ended or outward goals (send/post/buy/delete) so you
-hand those to a real model instead of auto-planning them.
+Risk classification is capability-based. `home`, `back`, app opening, swiping,
+and UI reads are safe. Any generic tap/resource tap/input requires confirmation.
+`delete`, `install`, and `change_settings` are destructive. Policy never decides
+from target strings, so translated or disguised labels do not bypass the gate.
 
 ## Connection is the user's job
 

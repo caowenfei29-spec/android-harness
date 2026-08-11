@@ -7,8 +7,8 @@ contributions are welcome — especially security reviews and clear bug fixes.
 
 1. Keep it focused. One logical change per PR.
 2. If you change anything under `agent-workspace/`, **say so explicitly** in
-   the PR description — that directory is auto-loaded and `exec`'d by the CLI,
-   so changes there are reviewed line by line.
+   the PR description. It is loaded only by explicit `--unsafe-script` mode,
+   but still runs as trusted host Python and is reviewed line by line.
 3. No new bundled binaries unless discussed first (supply-chain risk).
 
 ## Security-sensitive changes
@@ -16,7 +16,8 @@ contributions are welcome — especially security reviews and clear bug fixes.
 - Any new `exec`, `subprocess`, `adb.shell`, or shell-string interpolation
   must quote/escape untrusted input. See the `type_unicode` fix for the
   pattern: `'` → `'\''`.
-- Do not weaken the stop-and-ask consent model.
+- Do not bypass `TaskPlan → PolicyEngine → Authorization → Executor`.
+- Risk must be classified by capability, never localized UI label text.
 - If your PR touches a security control, ping the maintainer to confirm scope.
 
 ## Running locally

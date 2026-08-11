@@ -1,81 +1,177 @@
-"""The android-harness CLI: exec Python from stdin with helpers pre-imported.
-"""
-import sys
+"""Command line interface for planning and policy-gated execution."""
+from __future__ import annotations
+
+import json
 from pathlib import Path
+import sys
+from typing import Any
+
+from .executor import Executor
+from .plan import PlanValidationError, TaskPlan
+from .policy import AuthorizationError, ConfirmationRequest, PolicyEngine
+
 
 USAGE = """Usage:
-  android-harness <<'PY'
-  print(screen_info())
-  PY
+  android-harness plan "Open 微信"             output a JSON Task Plan
+  android-harness execute plan.json --confirm validate, confirm, and execute
+  android-harness execute -                   execute JSON from stdin (safe steps only)
 
-Commands:
-  android-harness --doctor    diagnose adb + device + connection state
-  android-harness skill       print the android-harness skill text
-  android-harness task        run a JSON list of steps (read from stdin)
-  android-harness web         start the local web control UI
+Compatibility and administration:
+  android-harness task                        alias for execute -
+  android-harness --unsafe-script [file|-]    UNSAFE: execute trusted Python
+  android-harness --doctor                    diagnose adb and device state
+  android-harness skill                       print SKILL.md
+  android-harness web [--unsafe]              local web UI; Python disabled by default
 
-Task steps (JSON array on stdin), each a dict with an "op":
-  {"op":"open","app":"微信"}            open by launcher label or package
-  {"op":"tap","text":"文件传输助手"}     tap a visible control by label
-  {"op":"tap_id","res_id":"pkg:id/x"}   tap by resource-id
-  {"op":"type","text":"hi"}             type ASCII into focused field
-  {"op":"type_unicode","text":"中文"}    type via ADBKeyboard
-  {"op":"wait","seconds":1.0}           pause
-  {"op":"ask","prompt":"确认发送?"}      STOP and ask the human
-Outward actions (send/post/buy/delete/install) must go through "ask".
-
-Example:
-  echo '[{"op":"open","app":"设置"},{"op":"tap","text":"关于手机"}]' | android-harness task
+Risk is classified by capability, not button text. Generic tap and input
+steps require confirmation. Destructive and settings steps are explicitly
+classified DESTRUCTIVE. Piped/non-interactive execution cannot confirm.
 """
 
-_TASK_HELP = USAGE
 
-
-def main():
-    args = sys.argv[1:]
-    if args and args[0] in {"-h", "--help"}:
+def main(argv: list[str] | None = None) -> None:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] in {"-h", "--help"}:
         print(USAGE)
         return
-    if args and args[0] in {"--doctor", "doctor"}:
+    command = args.pop(0)
+    if command in {"--doctor", "doctor"}:
         from .admin import run_doctor
-        sys.exit(run_doctor())
-    if args and args[0] == "skill":
+        raise SystemExit(run_doctor())
+    if command == "skill":
         repo_root = Path(__file__).resolve().parent.parent.parent
         print((repo_root / "SKILL.md").read_text(encoding="utf-8"), end="")
         return
-    if args and args[0] in {"task", "tasks"}:
-        from . import task as _task_mod
-        if len(args) > 1 and args[1] in {"-h", "--help", "help"}:
-            print(_TASK_HELP)
-            return
-        # Expect a JSON list of step dicts on stdin; print the result.
-        if sys.stdin.isatty():
-            print(_TASK_HELP)
-            return
-        import json as _json
-        try:
-            steps = _json.loads(sys.stdin.read())
-        except Exception as e:  # noqa: BLE001
-            print(f"TASK ERROR: invalid JSON steps: {e}")
-            return
-        result = _task_mod.run_task(steps)
-        print(_json.dumps(result, ensure_ascii=False))
+    if command == "plan":
+        _plan_command(args)
         return
-    if args and args[0] in {"web", "ui"}:
+    if command in {"execute", "task", "tasks"}:
+        if command in {"task", "tasks"} and not args:
+            args = ["-"]
+        _execute_command(args, legacy=command in {"task", "tasks"})
+        return
+    if command == "--unsafe-script":
+        _unsafe_script(args)
+        return
+    if command in {"web", "ui"}:
         repo_root = Path(__file__).resolve().parent.parent.parent
         sys.path.insert(0, str(repo_root))
-        import web as web_mod
-        web_mod.main(args[1:])
+        import web as web_module
+        web_module.main(args)
         return
-    if args or sys.stdin.isatty():
-        sys.exit(USAGE)
-    code = sys.stdin.read()
-    if not code.strip():
-        sys.exit(USAGE)
+    raise SystemExit("Unknown command.\n\n" + USAGE)
+
+
+def _plan_command(args: list[str]) -> None:
+    goal = " ".join(args).strip()
+    if not goal and not sys.stdin.isatty():
+        goal = sys.stdin.read().strip()
+    if not goal:
+        raise SystemExit("plan requires a natural-language goal")
+    from .llm import configured, generate_plan
+    from .task import plan_from_goal
+
+    legacy = plan_from_goal(goal)
+    if legacy is not None:
+        from .plan import normalize_legacy_steps
+        plan = normalize_legacy_steps(legacy)
+    elif configured():
+        plan = generate_plan(goal)
+    else:
+        raise SystemExit(
+            "No deterministic plan is available for this goal and the LLM is "
+            "not configured. Set LLM_* in .env or supply Task Plan JSON directly.")
+    print(plan.to_json())
+
+
+def _execute_command(args: list[str], *, legacy: bool = False) -> None:
+    confirm = False
+    paths: list[str] = []
+    for arg in args:
+        if arg == "--confirm":
+            confirm = True
+        elif arg in {"-h", "--help", "help"}:
+            print(USAGE)
+            return
+        else:
+            paths.append(arg)
+    if len(paths) > 1:
+        raise SystemExit("execute accepts at most one plan path")
+    source = paths[0] if paths else "-"
+    if source == "-":
+        if sys.stdin.isatty():
+            raise SystemExit("execute needs a JSON file or JSON on stdin")
+        raw = sys.stdin.read()
+    else:
+        raw = Path(source).read_text(encoding="utf-8")
+    try:
+        if legacy:
+            from .plan import normalize_legacy_steps
+            value = json.loads(raw)
+            plan = (normalize_legacy_steps(value) if isinstance(value, list)
+                    and any(isinstance(step, dict) and "op" in step
+                            for step in value)
+                    else TaskPlan.from_dict(value))
+        else:
+            plan = TaskPlan.from_json(raw)
+    except (PlanValidationError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"PLAN ERROR: {exc}") from exc
+
+    policy = PolicyEngine()
+    confirmer = _interactive_confirm if confirm else None
+    if confirm and source == "-":
+        raise SystemExit(
+            "Interactive confirmation requires a plan file; stdin is occupied "
+            "by JSON. Save the plan, then run execute FILE --confirm.")
+    try:
+        authorization = policy.authorize(plan, confirmer=confirmer)
+    except AuthorizationError as exc:
+        raise SystemExit(f"AUTHORIZATION DENIED: {exc}") from exc
+
     from . import helpers
-    g = {k: v for k, v in vars(helpers).items() if not k.startswith("_")}
-    g["__name__"] = "__main__"
-    exec(code, g)
+    try:
+        helpers.ensure_device()
+        result = Executor(policy=policy, helpers=helpers).execute(
+            plan, authorization).to_dict()
+    except Exception as exc:  # noqa: BLE001
+        result = {"done": False, "steps_run": 0, "stopped_at": None,
+                  "reason": f"{type(exc).__name__}: {exc}", "outputs": []}
+    print(json.dumps(result, ensure_ascii=False))
+    if not result["done"]:
+        raise SystemExit(1)
+
+
+def _interactive_confirm(request: ConfirmationRequest) -> bool:
+    print("\nHUMAN CONFIRMATION REQUIRED", file=sys.stderr)
+    print(f"Risk: {request.risk.value}", file=sys.stderr)
+    print(f"Step: {json.dumps(request.step.to_dict(), ensure_ascii=False)}",
+          file=sys.stderr)
+    print(f"Prompt: {request.prompt}", file=sys.stderr)
+    answer = input("Type 'yes' to authorize this exact step: ")
+    return answer.strip().lower() == "yes"
+
+
+def _unsafe_script(args: list[str]) -> None:
+    if len(args) > 1:
+        raise SystemExit("--unsafe-script accepts at most one file path")
+    source = args[0] if args else "-"
+    if source == "-":
+        if sys.stdin.isatty():
+            raise SystemExit("--unsafe-script needs a file or Python on stdin")
+        code = sys.stdin.read()
+    else:
+        code = Path(source).read_text(encoding="utf-8")
+    print(
+        "WARNING: --unsafe-script executes unrestricted Python on this host "
+        "and bypasses the JSON policy engine.", file=sys.stderr)
+    from . import helpers
+    helpers.enable_unsafe_agent_helpers()
+    namespace: dict[str, Any] = {
+        key: value for key, value in vars(helpers).items()
+        if not key.startswith("_")
+    }
+    namespace["__name__"] = "__main__"
+    exec(compile(code, source, "exec"), namespace)
 
 
 if __name__ == "__main__":

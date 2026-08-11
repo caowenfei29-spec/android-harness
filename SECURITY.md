@@ -1,62 +1,90 @@
 # Security Policy — android-harness
 
-android-harness lets an LLM agent drive a **real Android phone** over ADB.
-That is a powerful primitive: the agent can read the screen, tap, type,
-launch apps, and run arbitrary `adb shell` commands. This document describes
-what the harness does, where the real attack surface is, and how we keep it
-from becoming a tool that harms the phone's owner.
+android-harness lets a local operator drive a real Android phone over ADB. The
+production-safe interface does not execute model-generated source code:
 
-## Threat model
+```
+LLM → JSON Task Plan → Policy Engine → Human Confirmation → Executor → ADB
+```
 
-The phone owner is the trusted operator. The things the **agent reads from the
-phone screen** are *not* trusted: SMS, web pages, app content, notifications —
-any of these may contain text crafted to mislead the agent (prompt injection).
-The agent must never act on that text in a way that is outward-facing or hard
-to reverse (send, post, buy, delete, change settings, install) without an
-explicit, human-visible stop-and-ask gate.
+## Trust boundaries
 
-## Attack surface (real, in code today)
+The phone owner is the trusted operator. LLM output, phone UI text, SMS, web
+pages, notifications, plan files, and HTTP request bodies are untrusted. ADB,
+the host account, and an unlocked phone are high-value capabilities.
 
-| Surface | Where | Risk | Status |
-|---|---|---|---|
-| Arbitrary Python exec | `run.py` (CLI stdin), `web.py` `_run_script` | Agent/operator code runs on host | by design; web console needs auth+allowlist (TODO) |
-| Arbitrary device commands | `adb.shell()` | Any `adb shell` string executes on phone | bounded by stop-and-ask for outward actions |
-| Shell string interpolation | `type_unicode` (`am broadcast`) | Unescaped `msg` could break out of quotes | **Fixed** (quote escaping added) |
-| Untrusted on-screen text | `dump_nodes` / `find_text` | Prompt injection → unwanted actions | Mitigated by stop-and-ask consent model |
-| Bundled binary | `vendor/ADBKeyboard.apk` | Supply-chain provenance | Hash pinned below |
-| Auto-exec of repo code | `agent-workspace/agent_helpers.py` loaded + `exec`'d | Malicious PR to that file runs on load | Reviewed manually; PRs must flag changes |
+The security boundary is formed by these modules:
+
+- `plan.py` accepts a small, versioned JSON schema, rejects unknown fields and
+  capabilities, limits sizes/ranges, and computes a canonical plan digest.
+- `policy.py` owns validation, capability-based risk classification, and human
+  authorization. It signs confirmation tokens over plan digest, step ID, risk,
+  and a nonce.
+- `executor.py` accepts only `TaskPlan` plus `Authorization`. Before every step
+  it asks policy to verify authorization. It contains no safety heuristics.
+- `llm.py` may generate JSON data only. Its output always goes through the same
+  parser and policy as hand-written JSON.
+
+## Risk model
+
+Risk is never inferred from localized labels such as `发送`, `购买`, `删除`, or
+`安装`. Labels are attacker-controlled UI data and are not a security boundary.
+
+| Level | Capabilities | Behavior |
+|---|---|---|
+| `SAFE_NAVIGATION` | open app, home, back, swipe, bounded wait | no confirmation token needed |
+| `SAFE_READ` | read UI hierarchy/screen metadata | no confirmation token needed |
+| `USER_CONFIRM_REQUIRED` | every generic tap, resource tap, long press, text input, send, purchase | exact step must be confirmed |
+| `DESTRUCTIVE` | delete, install, change settings | exact step must be confirmed with destructive warning |
+
+Generic taps fail closed because a target label or coordinate cannot prove the
+effect of the control. This is intentionally more conservative than keyword
+filtering and remains safe if an LLM misclassifies a semantic action as a tap.
+
+An `ask` step is only a human-facing prompt for the following risky step. It is
+not a token and cannot authorize a preceding or subsequent action by itself.
+The flow is `ask → human approval → plan-bound token → risky step`.
+
+## Web and legacy Python
+
+The web server refuses non-loopback bind addresses and rejects non-loopback
+`Host`, cross-origin `Origin`, and non-JSON action requests to mitigate DNS
+rebinding and browser CSRF. Unrestricted Python is disabled by default and its
+endpoint returns a denial. `web.py --unsafe` enables the console only on
+loopback and prints a prominent warning.
+
+The default CLI never executes stdin as Python. Legacy trusted scripts require
+the explicit `--unsafe-script` flag, which prints a warning and bypasses the
+JSON policy boundary. Agent workspace Python is loaded only in that unsafe mode.
+
+These unsafe modes protect against accidental exposure, not malicious local
+users with access to the same OS account. Such users can invoke ADB directly.
+
+## Attack surface
+
+| Surface | Control |
+|---|---|
+| LLM output | strict JSON parser; no `exec`, imports, expressions, or callbacks |
+| Risky ADB action | capability policy plus signed, plan-bound confirmation token |
+| Prompt injection in UI text | text is data; generic taps/input fail closed |
+| Web API | loopback bind/Host/Origin checks, size-limited JSON, Python off by default |
+| Arbitrary host Python | explicit `--unsafe-script` / web `--unsafe` only |
+| Device shell quoting | unicode input single-quote escaping; fixed argv where possible |
+| Bundled APK | SHA-256 pinned below |
 
 ## Supply-chain note
 
-`vendor/ADBKeyboard.apk` is bundled so Chinese/unicode input works without a
-network download. Source: ADBKeyboard (open-source IME, widely mirrored on
-F-Droid/GitHub). Pinned SHA-256:
+`vendor/ADBKeyboard.apk` is bundled for Unicode input. Pinned SHA-256:
 
 ```
 f9446fd3d7f775a764eb0df696b6819a7f3a4ea85bd17871855848ef72d6bb21  vendor/ADBKeyboard.apk
 ```
 
-Do not replace this binary without updating the hash above and recording why.
-
-## Consent model
-
-The harness follows a "stop and ask" rule: before anything outward-facing or
-hard to reverse, the agent must pause and get the human's confirmation.
-Connecting the phone (USB + USB debugging approval) is always a **physical**
-action by the owner — the harness never auto-connects. Pull requests that
-weaken this model are rejected.
+Do not replace this binary without updating the hash and recording provenance.
 
 ## Reporting a vulnerability
 
-Please **do not** open a public issue for security problems.
-
-- Email the maintainer (GitHub user `caowenfei29-spec`) via a GitHub Security
-  Advisory draft, or file a private report through the repo's "Security" tab.
-- Include: what you found, the exact code path, a minimal reproduction, and
-  suggested fix if any.
-- Response target: within 7 days for acknowledgement.
-
-## Scope of maintenance
-
-This is a single-maintainer project. Security fixes take priority over
-features. Every release must re-check the attack-surface table above.
+Do not open a public issue. Contact GitHub user `caowenfei29-spec` through a
+draft Security Advisory or the repository Security tab. Include the code path,
+minimal reproduction, impact, and a suggested fix if available. The target for
+acknowledgement is seven days.

@@ -1,8 +1,6 @@
 """Tests for the task-level wrapper (no phone required).
 
-These exercise the parts that are pure logic: step builders, the safety
-planner's refusal of outward actions, and run_task's behaviour when the device
-is absent (it must stop, not crash, and report a clear reason).
+These exercise compatibility builders and the policy-backed run_task wrapper.
 """
 import sys
 from pathlib import Path
@@ -59,8 +57,8 @@ def test_run_task_stops_when_no_device():
     assert res["stopped_at"] == steps[0]
 
 
-def test_run_task_halts_on_ask():
-    # With a device present, the loop must STOP at the first step_ask.
+def test_run_task_blocks_risky_step_before_late_ask():
+    # A later ask cannot retroactively authorize an earlier risky tap.
     calls = []
 
     class FakeH:
@@ -83,7 +81,32 @@ def test_run_task_halts_on_ask():
     ]
     res = task.run_task(steps, helpers=FakeH)
     assert res["done"] is False
-    assert res["steps_run"] == 1  # tapped, then halted at ask
-    assert calls == ["文件传输助手"]
-    assert "确认发送" in res["reason"]
-    assert res["stopped_at"] == steps[1]
+    assert res["steps_run"] == 0
+    assert calls == []
+    assert "requires human confirmation" in res["reason"]
+
+
+def test_run_task_ask_then_confirm_then_tap():
+    calls = []
+
+    class FakeH:
+        @staticmethod
+        def ensure_device():
+            pass
+
+        @staticmethod
+        def tap_text(text, exact=False):
+            calls.append(text)
+
+        @staticmethod
+        def wait_stable():
+            return True
+
+    prompts = []
+    steps = [task.step_ask("确认发送?"), task.step_tap("发送")]
+    res = task.run_task(
+        steps, helpers=FakeH,
+        confirmer=lambda request: prompts.append(request.prompt) or True)
+    assert res["done"] is True
+    assert calls == ["发送"]
+    assert prompts == ["确认发送?"]
