@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+from dataclasses import dataclass
+import hmac
 import io
 import ipaddress
 import json
 import os
 from pathlib import Path
+import secrets
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlsplit
@@ -27,14 +32,89 @@ from android_harness.llm import (  # noqa: E402
 )
 from android_harness.plan import TaskPlan  # noqa: E402
 from android_harness.policy import (  # noqa: E402
+    Authorization,
     AuthorizationError,
-    ConfirmationRequest,
     PolicyEngine,
 )
 
 WEB_DIR = HARNESS_ROOT / "web"
 DEFAULT_PORT = int(os.environ.get("ANDROID_HARNESS_WEB_PORT", "8741"))
 _UNSAFE_SCRIPT_ENABLED = False
+_CHALLENGE_TTL_SECONDS = 300.0
+_MAX_PENDING_CHALLENGES = 256
+
+
+class ConfirmationChallengeError(PermissionError):
+    """Raised when a web confirmation challenge is absent or invalid."""
+
+
+@dataclass(frozen=True)
+class _ConfirmationChallenge:
+    token: str
+    plan: TaskPlan
+    plan_digest: str
+    expires_at: float
+
+
+class _ConfirmationChallengeStore:
+    """Thread-safe, one-time server-side store for exact pending plans."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending: dict[str, _ConfirmationChallenge] = {}
+
+    def create(self, plan: TaskPlan) -> _ConfirmationChallenge:
+        now = time.monotonic()
+        with self._lock:
+            self._purge_expired(now)
+            if len(self._pending) >= _MAX_PENDING_CHALLENGES:
+                oldest = min(
+                    self._pending.values(), key=lambda item: item.expires_at)
+                self._pending.pop(oldest.token, None)
+            token = secrets.token_urlsafe(32)
+            challenge = _ConfirmationChallenge(
+                token=token,
+                plan=plan,
+                plan_digest=plan.digest(),
+                expires_at=now + _CHALLENGE_TTL_SECONDS,
+            )
+            self._pending[token] = challenge
+            return challenge
+
+    def consume(self, token: str, plan_digest: str) -> _ConfirmationChallenge:
+        if not token or not plan_digest:
+            raise ConfirmationChallengeError(
+                "confirmation requires challenge and plan_digest")
+        now = time.monotonic()
+        with self._lock:
+            self._purge_expired(now)
+            challenge = self._pending.get(token)
+            if challenge is None:
+                raise ConfirmationChallengeError(
+                    "confirmation challenge is invalid, expired, or already used")
+            if not hmac.compare_digest(challenge.plan_digest, plan_digest):
+                raise ConfirmationChallengeError(
+                    "confirmation digest does not match the challenged plan")
+            # Consume atomically before ADB execution. Concurrent replays can
+            # never obtain the same confirmed plan twice.
+            self._pending.pop(token)
+        if not hmac.compare_digest(challenge.plan.digest(), challenge.plan_digest):
+            raise ConfirmationChallengeError("stored confirmation plan changed")
+        return challenge
+
+    def clear(self) -> None:
+        """Clear pending challenges (server lifecycle and test isolation)."""
+        with self._lock:
+            self._pending.clear()
+
+    def _purge_expired(self, now: float) -> None:
+        expired = [token for token, item in self._pending.items()
+                   if item.expires_at <= now]
+        for token in expired:
+            self._pending.pop(token, None)
+
+
+_CONFIRMATION_CHALLENGES = _ConfirmationChallengeStore()
 
 
 def _state() -> dict[str, Any]:
@@ -59,20 +139,39 @@ def _require_ready() -> None:
             "debugging, approve the prompt, then retry.")
 
 
-def _execute_plan(plan: TaskPlan, confirmed: bool) -> dict[str, Any]:
+def _execute_plan(plan: TaskPlan) -> dict[str, Any]:
+    """Execute safe plans or create a challenge for an exact risky plan."""
     policy = PolicyEngine()
-
-    def browser_confirmation(_request: ConfirmationRequest) -> bool:
-        # The server only accepts loopback clients.  `confirmed` is set after
-        # the local UI displays the exact plan and the user accepts it.
-        return confirmed is True
-
+    plan = policy.validate(plan)
     try:
-        authorization = policy.authorize(
-            plan, confirmer=browser_confirmation if confirmed else None)
+        authorization = policy.authorize(plan)
     except AuthorizationError as exc:
+        challenge = _CONFIRMATION_CHALLENGES.create(plan)
         return {"ok": False, "confirmation_required": True,
+                "challenge": challenge.token,
+                "plan_digest": challenge.plan_digest,
+                "expires_in_seconds": int(_CHALLENGE_TTL_SECONDS),
                 "plan": plan.to_dict(), "error": str(exc)}
+    return _execute_authorized_plan(plan, policy, authorization)
+
+
+def _confirm_challenge(data: dict[str, Any]) -> dict[str, Any]:
+    try:
+        challenge = _CONFIRMATION_CHALLENGES.consume(
+            str(data.get("challenge", "")),
+            str(data.get("plan_digest", "")),
+        )
+        policy = PolicyEngine()
+        authorization = policy.authorize(
+            challenge.plan, confirmer=lambda _request: True)
+        return _execute_authorized_plan(challenge.plan, policy, authorization)
+    except (ConfirmationChallengeError, AuthorizationError) as exc:
+        return {"ok": False, "blocked": True, "error": str(exc)}
+
+
+def _execute_authorized_plan(
+    plan: TaskPlan, policy: PolicyEngine, authorization: Authorization
+) -> dict[str, Any]:
     _require_ready()
     result = Executor(policy=policy, helpers=H).execute(plan, authorization)
     payload = result.to_dict()
@@ -84,7 +183,14 @@ def _execute_plan(plan: TaskPlan, confirmed: bool) -> dict[str, Any]:
 
 
 def _do_action(op: Any, data: dict[str, Any]) -> dict[str, Any]:
-    confirmed = data.get("confirmed") is True
+    # Historical clients could set this boolean and cause the natural-language
+    # request (and therefore the LLM) to run again. It is never authorization.
+    if "confirmed" in data:
+        return {"ok": False, "blocked": True,
+                "error": "confirmed:true is not authorization; use the "
+                         "server-issued one-time confirmation challenge"}
+    if op == "confirm":
+        return _confirm_challenge(data)
     if op == "natural":
         if not llm_configured():
             return {"ok": False, "error": "LLM 未配置：请设置 LLM_* 环境变量"}
@@ -92,7 +198,7 @@ def _do_action(op: Any, data: dict[str, Any]) -> dict[str, Any]:
         if not prompt:
             return {"ok": False, "error": "空指令"}
         try:
-            return _execute_plan(generate_plan(prompt), confirmed)
+            return _execute_plan(generate_plan(prompt))
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"计划生成失败: {exc}"}
     if op == "summarize":
@@ -136,7 +242,7 @@ def _do_action(op: Any, data: dict[str, Any]) -> dict[str, Any]:
         step = builders[str(op)]()
     except KeyError as exc:
         raise RuntimeError(f"unknown op {op!r}") from exc
-    return _execute_plan(TaskPlan.from_dict({"version": 1, "steps": [step]}), confirmed)
+    return _execute_plan(TaskPlan.from_dict({"version": 1, "steps": [step]}))
 
 
 def _run_unsafe_script(code: str) -> dict[str, Any]:

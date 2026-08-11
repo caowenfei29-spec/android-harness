@@ -170,9 +170,10 @@ async function act(op, body) {
     if (!confirm('风险操作需要人工确认：\n\n' + res.error + '\n\n' + detail)) {
       log('✗ 用户拒绝确认', 'err'); return res;
     }
-    data.confirmed = true;
     res = await api('/action', {method:'POST',
-      headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+        op:'confirm', challenge:res.challenge, plan_digest:res.plan_digest
+      })});
   }
   if (res.ok) { log('✓ ' + op + (res.output ? '' : ''), 'ok'); if (res.output) log(res.output); }
   else { log('✗ ' + (res.error||'failed'), 'err'); }
@@ -309,9 +310,10 @@ $('#t-nl').onclick = async () => {
                  res.error + '\n\n' + JSON.stringify(res.plan, null, 2))) {
       nlLog('✗ 用户拒绝确认', 'err'); $('#nl-status').textContent = '已拒绝'; return;
     }
-    request.confirmed = true;
     res = await api('/action', {method:'POST',
-      headers:{'Content-Type':'application/json'}, body: JSON.stringify(request)});
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({
+        op:'confirm', challenge:res.challenge, plan_digest:res.plan_digest
+      })});
   }
   if (res.blocked) {
     nlLog('✗ 已拦截: ' + res.error, 'err');

@@ -84,7 +84,9 @@ Features in the page:
 - Click anywhere on the mirrored screen to tap that coordinate.
 - Toggle "显示控件" to overlay tappable UI boxes (from the real view tree).
 - "按文字点击" chips: tap a labeled control by name.
-- Risky actions display their exact JSON plan and require local confirmation.
+- Risky actions display their exact JSON plan and require a server-issued,
+  one-time confirmation challenge bound to that plan digest. Confirmation never
+  regenerates the plan or calls the LLM a second time.
 
 For trusted local development only, `python web.py --unsafe` enables the Python
 console with a prominent warning. It still cannot bind outside localhost.

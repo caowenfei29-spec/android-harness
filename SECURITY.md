@@ -53,6 +53,13 @@ rebinding and browser CSRF. Unrestricted Python is disabled by default and its
 endpoint returns a denial. `web.py --unsafe` enables the console only on
 loopback and prints a prominent warning.
 
+Risky Web plans use a server-side, five-minute, one-time confirmation challenge.
+The first request stores the exact validated `TaskPlan` and its digest. The
+browser confirms only the opaque challenge plus that digest; the server
+atomically consumes the challenge and executes the stored plan without calling
+the LLM again. Client-supplied replacement plans are ignored, digest mismatches
+are rejected, and a bare `confirmed:true` is never authorization.
+
 The default CLI never executes stdin as Python. Legacy trusted scripts require
 the explicit `--unsafe-script` flag, which prints a warning and bypasses the
 JSON policy boundary. Agent workspace Python is loaded only in that unsafe mode.
@@ -67,7 +74,7 @@ users with access to the same OS account. Such users can invoke ADB directly.
 | LLM output | strict JSON parser; no `exec`, imports, expressions, or callbacks |
 | Risky ADB action | capability policy plus signed, plan-bound confirmation token |
 | Prompt injection in UI text | text is data; generic taps/input fail closed |
-| Web API | loopback bind/Host/Origin checks, size-limited JSON, Python off by default |
+| Web API | loopback/Host/Origin checks, one-time plan-bound challenges, size-limited JSON, Python off by default |
 | Arbitrary host Python | explicit `--unsafe-script` / web `--unsafe` only |
 | Device shell quoting | unicode input single-quote escaping; fixed argv where possible |
 | Bundled APK | SHA-256 pinned below |
