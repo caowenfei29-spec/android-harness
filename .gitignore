@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Local agent workspace overrides (optional, keep out of repo)
+agent-workspace/__pycache__/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Never commit local screenshots / dumps
+*.png
+/sdcard/
+/tmp/

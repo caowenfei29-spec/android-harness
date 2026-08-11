@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>android-harness 控制台</title>
+<style>
+  :root { --bg:#0f1115; --panel:#1a1d24; --line:#2a2f3a; --fg:#e6e6e6;
+          --accent:#4f9dff; --ok:#39d98a; --warn:#ffb454; --err:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  header { display:flex; gap:16px; align-items:center; padding:10px 16px;
+           background:var(--panel); border-bottom:1px solid var(--line);
+           flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .stat { font-size:12px; color:#9aa3b2; }
+  .stat b { color:var(--fg); font-weight:600; }
+  .wrap { display:flex; gap:16px; padding:16px; align-items:flex-start;
+          flex-wrap:wrap; }
+  .stage { position:relative; flex:1 1 360px; min-width:300px;
+           background:#000; border:1px solid var(--line); border-radius:10px;
+           overflow:hidden; }
+  #screen { display:block; width:100%; height:auto; cursor:crosshair; }
+  #overlay { position:absolute; inset:0; pointer-events:none; }
+  .node { position:absolute; border:1px solid rgba(79,157,255,.0);
+          pointer-events:auto; cursor:pointer; }
+  .node:hover { border-color:var(--accent);
+                background:rgba(79,157,255,.12); }
+  .flash { position:absolute; width:18px; height:18px; margin:-9px 0 0 -9px;
+           border:2px solid var(--ok); border-radius:50%; pointer-events:none;
+           animation:pop .4s ease-out forwards; }
+  @keyframes pop { from{transform:scale(.4);opacity:1}
+                   to{transform:scale(1.6);opacity:0} }
+  .side { flex:0 0 320px; display:flex; flex-direction:column; gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line);
+          border-radius:10px; padding:12px; }
+  .card h2 { font-size:13px; margin:0 0 10px; color:#9aa3b2;
+             text-transform:uppercase; letter-spacing:.04em; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  button { background:var(--line); color:var(--fg); border:1px solid #3a4150;
+           border-radius:8px; padding:7px 11px; cursor:pointer; font-size:13px; }
+  button:hover { border-color:var(--accent); }
+  button.go { background:var(--accent); color:#06121f; border-color:var(--accent);
+              font-weight:600; }
+  button.toggle.on { background:var(--ok); color:#06121f; border-color:var(--ok); }
+  input, textarea { width:100%; background:#0c0e12; color:var(--fg);
+                    border:1px solid var(--line); border-radius:8px;
+                    padding:7px 9px; font-size:13px; }
+  textarea { resize:vertical; min-height:120px; font-family:ui-monospace,Menlo,Consolas,monospace; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; max-height:180px;
+           overflow:auto; }
+  .chip { background:#222732; border:1px solid #333b49; border-radius:14px;
+          padding:4px 10px; font-size:12px; cursor:pointer; }
+  .chip:hover { border-color:var(--accent); }
+  #log { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
+         white-space:pre-wrap; max-height:150px; overflow:auto; color:#9aa3b2; }
+  .ok { color:var(--ok); } .err { color:var(--err); }
+  .hint { color:#6b7280; font-size:11px; margin-top:6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📱 android-harness 控制台</h1>
+  <span class="stat">连接: <b id="s-conn">…</b></span>
+  <span class="stat">当前应用: <b id="s-app">…</b></span>
+  <span class="stat">分辨率: <b id="s-size">…</b></span>
+  <span class="stat">中文输入: <b id="s-kbd">…</b></span>
+</header>
+
+<div class="wrap">
+  <div class="stage">
+    <img id="screen" alt="phone screen" />
+    <div id="overlay"></div>
+  </div>
+
+  <div class="side">
+    <div class="card">
+      <h2>操控</h2>
+      <div class="row">
+        <button class="go" data-act="home">Home</button>
+        <button data-act="back">Back</button>
+        <button id="t-refresh">刷新截图</button>
+        <button id="t-auto" class="toggle">自动刷新</button>
+        <button id="t-nodes" class="toggle">显示控件</button>
+      </div>
+      <div class="hint">点击截图任意处 = 点击该坐标；开启"显示控件"后可直接点控件框。</div>
+    </div>
+
+    <div class="card">
+      <h2>按文字点击</h2>
+      <div id="labels" class="chips"><span class="hint">刷新后显示可点击文字</span></div>
+    </div>
+
+    <div class="card">
+      <h2>输入文字</h2>
+      <input id="i-text" placeholder="要输入的文字" />
+      <div class="row" style="margin-top:8px">
+        <button data-type="ascii">输入 (ASCII)</button>
+        <button class="go" data-type="unicode">输入中文/Unicode</button>
+      </div>
+      <div class="hint">ASCII 用 adb input；中文需 ADBKeyboard（已自动临时切换输入法，不打扰日常键盘）。</div>
+    </div>
+
+    <div class="card">
+      <h2>打开应用</h2>
+      <input id="i-app" placeholder="桌面图标名称，如 微信" />
+      <div class="row" style="margin-top:8px">
+        <button class="go" data-open="1">打开</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>脚本控制台 (Python)</h2>
+      <textarea id="i-code" placeholder="home()&#10;tap_text('设置')&#10;print([n['text'] for n in dump_nodes()][:10])"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="go" id="t-run">运行</button>
+      </div>
+      <pre id="log"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = sel => document.querySelector(sel);
+let screenW = 1080, screenH = 2340;
+let showNodes = false, autoTimer = null;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  return r.json();
+}
+function log(msg, cls) {
+  const el = $('#log');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+async function act(op, body) {
+  const data = Object.assign({op}, body);
+  const res = await api('/action', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  if (res.ok) { log('✓ ' + op + (res.output ? '' : ''), 'ok'); if (res.output) log(res.output); }
+  else { log('✗ ' + (res.error||'failed'), 'err'); }
+  if (op !== 'home' && op !== 'back') setTimeout(refresh, 400);
+  return res;
+}
+async function refresh() {
+  let st;
+  try { st = await api('/state'); } catch(e) { return; }
+  $('#s-conn').textContent = st.state;
+  $('#s-app').textContent = st.package || '—';
+  $('#s-size').textContent = st.size ? st.size.join('×') : '—';
+  $('#s-kbd').textContent = st.adbkeyboard ? '已装' : '未装';
+  if (st.state !== 'ready') {
+    $('#s-conn').style.color = 'var(--err)';
+    $('#screen').style.opacity = .3;
+    return;
+  }
+  $('#s-conn').style.color = 'var(--ok)';
+  $('#screen').style.opacity = 1;
+  if (st.size) { screenW = st.size[0]; screenH = st.size[1]; }
+  $('#screen').src = '/screen?' + Date.now();
+  if (showNodes) await drawNodes(); else await loadLabels();
+}
+async function drawNodes() {
+  const ns = await api('/nodes');
+  const ov = $('#overlay'); ov.innerHTML = '';
+  if (ns.error) return;
+  for (const n of ns) {
+    const b = n.bounds; if (!b) continue;
+    const d = document.createElement('div');
+    d.className = 'node';
+    d.style.left = (b[0]/screenW*100) + '%';
+    d.style.top = (b[1]/screenH*100) + '%';
+    d.style.width = ((b[2]-b[0])/screenW*100) + '%';
+    d.style.height = ((b[3]-b[1])/screenH*100) + '%';
+    const tip = n.text || n.desc;
+    if (tip) d.title = tip;
+    d.onclick = (e) => { e.stopPropagation(); flash(b[0],b[1]); act('tap',{x:n.x,y:n.y}); };
+    ov.appendChild(d);
+  }
+}
+async function loadLabels() {
+  const ns = await api('/nodes');
+  const box = $('#labels'); box.innerHTML = '';
+  if (ns.error) { box.innerHTML = '<span class="hint">无法读取</span>'; return; }
+  const seen = new Set();
+  for (const n of ns) {
+    const label = n.text || n.desc;
+    if (!label || !n.clickable) continue;
+    if (seen.has(label)) continue; seen.add(label);
+    const c = document.createElement('span');
+    c.className = 'chip'; c.textContent = label;
+    c.onclick = () => act('tap', {x:n.x, y:n.y});
+    box.appendChild(c);
+  }
+  if (!box.children.length) box.innerHTML = '<span class="hint">无可点击文字</span>';
+}
+function flash(x, y) {
+  const f = document.createElement('div');
+  f.className = 'flash';
+  f.style.left = (x/screenW*100) + '%';
+  f.style.top = (y/screenH*100) + '%';
+  $('#overlay').appendChild(f);
+  setTimeout(() => f.remove(), 420);
+}
+
+// screenshot click → tap at mapped coords
+$('#screen').addEventListener('click', (e) => {
+  if (showNodes) return; // node boxes handle clicks
+  const r = e.currentTarget.getBoundingClientRect();
+  const x = Math.round((e.clientX - r.left) / r.width * screenW);
+  const y = Math.round((e.clientY - r.top) / r.height * screenH);
+  flash(x, y);
+  act('tap', {x, y});
+});
+
+// buttons
+document.querySelectorAll('[data-act]').forEach(b => {
+  b.onclick = () => act(b.dataset.act, {});
+});
+$('#t-refresh').onclick = refresh;
+$('#t-auto').onclick = function() {
+  this.classList.toggle('on');
+  if (this.classList.contains('on')) {
+    autoTimer = setInterval(refresh, 1500);
+    log('自动刷新 开');
+  } else { clearInterval(autoTimer); log('自动刷新 关'); }
+};
+$('#t-nodes').onclick = function() {
+  showNodes = !showNodes;
+  this.classList.toggle('on', showNodes);
+  $('#overlay').innerHTML = '';
+  if (showNodes) drawNodes(); else loadLabels();
+};
+document.querySelectorAll('[data-type]').forEach(b => {
+  b.onclick = () => {
+    const t = $('#i-text').value;
+    if (!t) return;
+    act(b.dataset.type === 'unicode' ? 'type_unicode' : 'type', {text:t});
+  };
+});
+$('[data-open]').onclick = () => {
+  const n = $('#i-app').value.trim();
+  if (n) act('open', {name:n});
+};
+$('#t-run').onclick = () => {
+  const code = $('#i-code').value;
+  act('run', {code});
+};
+
+refresh();
+setInterval(refresh, 5000); // light keep-alive state poll
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+[project]
+name = "android-harness"
+version = "0.1.0"
+description = "Control a real Android phone via ADB: uiautomator DOM eyes, input hands"
+requires-python = ">=3.10"
+
+[project.scripts]
+android-harness = "android_harness.run:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/android_harness"]
