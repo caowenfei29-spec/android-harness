@@ -6,6 +6,9 @@ but adapted to Android where the transport is cleaner.
 
 Repo: https://github.com/caowenfei29-spec/android-harness
 
+[![CI](https://github.com/caowenfei29-spec/android-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/caowenfei29-spec/android-harness/actions/workflows/ci.yml)
+License: [MIT](LICENSE) · Security: [SECURITY.md](SECURITY.md) · Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+
 The agent drives the phone through ADB:
 - **Eyes** — `uiautomator dump` gives the real UI hierarchy (a DOM), not OCR.
   Every node carries its own text, content-desc, class, and tap-ready bounds.
@@ -39,6 +42,34 @@ type_text("hello from the harness")
 print([n["text"] for n in dump_nodes()][:10])
 PY
 ```
+
+## Install
+
+From source (recommended for editing the skill):
+
+```bash
+git clone https://github.com/caowenfei29-spec/android-harness
+cd android-harness
+pip install -e . --no-deps
+android-harness --doctor
+```
+
+From PyPI (once published):
+
+```bash
+pip install android-harness
+```
+
+Runtime is **standard-library only** (Python ≥ 3.10); the build backend is
+hatchling. See [PUBLISH.md](PUBLISH.md) for the release flow.
+
+## Safety & trust
+
+This harness drives a **real phone** and can run arbitrary `adb` commands. It
+follows a strict consent model: stop and ask before anything outward-facing or
+hard to reverse (send, post, buy, delete, change settings, install). Read
+[SECURITY.md](SECURITY.md) for the threat model and the current attack-surface
+table before wiring it into an agent.
 
 ## Why Android is the better target here
 
