@@ -192,8 +192,12 @@ def type_unicode(text):
             "请在手机上手动切换：设置 → 其他设置 → 键盘与输入法 → 当前输入法 "
             "→ 选择 ADB Keyboard。选好后 type_unicode() 即可打中文；用完了在同一"
             "菜单切回 搜狗 即可。")
+    # msg is wrapped in single quotes for the device-side shell. Escape
+    # embedded single quotes so an odd/malicious msg cannot break out of the
+    # quotes and inject extra shell commands (prompt-injection -> RCE surface).
+    safe = text.replace("'", "'\\''")
     run("shell",
-        f"am broadcast -a ADB_INPUT_TEXT --es msg '{text}'",
+        f"am broadcast -a ADB_INPUT_TEXT --es msg '{safe}'",
         timeout=15)
     time.sleep(0.3)
 
