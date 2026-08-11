@@ -119,12 +119,22 @@ def screenshot(path=None):
 
 
 def screen_info():
-    """{size, app, state} — handy snapshot of the current screen."""
+    """{size, package, activity, nodes, texts} — handy snapshot of the screen.
+
+    `package`/`activity` come from `adb shell dumpsys`; if that returns nothing
+    on a given ROM, we fall back to the package seen in the uiautomator dump so
+    the snapshot is still useful.
+    """
     _adb.ensure_device()
     size = _adb.screen_size()
     pkg, act = _adb.current_app()
+    nodes = dump_nodes()
+    if not pkg and nodes:
+        pkg = nodes[0].get("pkg")
+    texts = [n.get("text") for n in nodes if n.get("text")]
     return {"size": size, "package": pkg, "activity": act,
-            "state": _adb.device_state()}
+            "state": _adb.device_state(), "nodes": len(nodes),
+            "texts": texts}
 
 
 # --- opening apps ---------------------------------------------------------

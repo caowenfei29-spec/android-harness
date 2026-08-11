@@ -230,9 +230,14 @@ def screen_size():
 
 def current_app():
     out = shell("dumpsys window", timeout=10)
-    m = re.search(r"mCurrentFocus=Window\{[^ ]+ \w+ ([^/]+)/([^} ]+)", out)
+    # mCurrentFocus form: ... Window{... pkg/Act
+    m = re.search(r"mCurrentFocus=Window\{[^}]*?([\w.]+)/([\w.]+)", out)
     if m:
         return m.group(1), m.group(2)
+    # Some ROMs expose the focused app via AppWindowToken/ActivityRecord instead.
+    m2 = re.search(r"ActivityRecord\{[^{}]*u0\s+([\w.]+)/([\w.]+)", out)
+    if m2:
+        return m2.group(1), m2.group(2)
     return None, None
 
 
