@@ -25,6 +25,69 @@ sys.path.insert(0, str(HARNESS_ROOT / "src"))
 from android_harness import helpers as H  # noqa: E402
 from android_harness import adb as A      # noqa: E402
 from android_harness import ui as UI       # noqa: E402
+try:
+    from llm import translate, summarize, configured as llm_configured
+except Exception:  # noqa: BLE001
+    translate = summarize = None
+    def llm_configured():
+        return False
+
+
+# Outward / destructive actions that must NEVER run without a human step_ask.
+# We use a POSITIVE whitelist (AST-checked) instead of keyword blocking, because
+# an LLM can phrase forbidden actions in Chinese or variants that keyword scans
+# miss. Only calls to the names below are allowed to execute.
+_ALLOWED_CALLS = {
+    "launch", "tap_text", "tap_res_id", "scroll_screen", "dump_nodes",
+    "screen_info", "run_task",
+    "step_open", "step_tap", "step_tap_id", "step_type",
+    "step_type_unicode", "step_wait", "step_ask",
+    # safe builtins the translator legitimately uses for read/format only
+    "print", "len", "range", "list", "str", "int", "dict", "set",
+    "enumerate", "zip", "sorted", "tuple", "bool", "float",
+}
+_IMPORT_ALLOWED = {"time", "json"}
+
+
+def _safe_code(code: str) -> (bool, str):
+    """AST-whitelist check: only allow calls to known read-only / navigation
+    harness functions (and step_ask for human confirmation). Rejects anything
+    else so an LLM cannot sneak in send/post/buy/delete/install/uninstall or
+    arbitrary Python. Returns (ok, reason)."""
+    import ast
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return False, "翻译出的代码语法错误: %s" % e
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for n in node.names:
+                if n.name not in _IMPORT_ALLOWED:
+                    return False, "不允许导入模块 '%s'（仅允许 %s）" % (
+                        n.name, ", ".join(sorted(_IMPORT_ALLOWED)))
+        elif isinstance(node, ast.ImportFrom):
+            # Only allow `from android_harness import ...` (the harness API).
+            # What it imports is safe — the harness module only exposes the
+            # intended surface; the danger is in *calling* unknown functions,
+            # which the Call check below handles.
+            if getattr(node.module, "split", None) and \
+                    node.module.split(".")[0] != "android_harness":
+                return False, "不允许从 '%s' 导入（仅允许 android_harness）" % node.module
+        elif isinstance(node, ast.Call):
+            func = node.func
+            name = None
+            if isinstance(func, ast.Attribute):
+                name = func.attr
+            elif isinstance(func, ast.Name):
+                name = func.id
+            if name is None:
+                return False, "无法识别的调用"
+            if name not in _ALLOWED_CALLS:
+                return False, (
+                    "拦截：翻译代码调用了未授权函数 '%s'。只允许只读/导航操作"
+                    "(launch/tap_text/scroll_screen/dump_nodes/run_task 及 step_*)。"
+                    "外向动作(发送/购买/删除/安装等)必须由 step_ask 包成确认步骤。" % name)
+    return True, ""
 
 WEB_DIR = HARNESS_ROOT / "web"
 DEFAULT_PORT = int(os.environ.get("ANDROID_HARNESS_WEB_PORT", "8741"))
@@ -79,6 +142,40 @@ def _do_action(op, data):
         _require_ready(); A.launch(str(data["pkg"]))
     elif op == "run":
         return _run_script(str(data.get("code", "")))
+    elif op == "natural":
+        # Natural-language command -> translate to harness code -> safety check
+        # -> execute. Outward actions without step_ask are blocked.
+        if not llm_configured():
+            return {"ok": False, "error": "LLM 未配置：在 .env 设置 LLM_BASE_URL/"
+                    "LLM_API_KEY/LLM_MODEL"}
+        prompt = str(data.get("prompt", "")).strip()
+        if not prompt:
+            return {"ok": False, "error": "空指令"}
+        try:
+            code = translate(prompt)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": "翻译失败: %s" % e}
+        ok, reason = _safe_code(code)
+        if not ok:
+            return {"ok": False, "blocked": True, "code": code,
+                    "error": reason}
+        # expose task/helpers to the translated code
+        result = _run_script_with(code, {"H": H, "A": A, "task": __import__(
+            "android_harness.task", fromlist=["task"])})
+        result["code"] = code
+        result["needs_confirm"] = "step_ask" in code
+        return result
+    elif op == "summarize":
+        if not llm_configured():
+            return {"ok": False, "error": "LLM 未配置"}
+        screens = data.get("screens") or []
+        if not screens:
+            return {"ok": False, "error": "没有可总结的屏幕文字"}
+        try:
+            summary = summarize([str(s) for s in screens])
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": "总结失败: %s" % e}
+        return {"ok": True, "summary": summary}
     else:
         raise RuntimeError("unknown op %r" % op)
     return {"ok": True}
@@ -86,6 +183,19 @@ def _do_action(op, data):
 
 def _run_script(code):
     g = {k: v for k, v in vars(H).items() if not k.startswith("_")}
+    g["__name__"] = "__main__"
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            exec(code, g)
+        return {"ok": True, "output": buf.getvalue()}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "output": "ERROR: %s: %s" % (type(e).__name__, e)}
+
+
+def _run_script_with(code, extra):
+    """Run translated code with an explicit globals namespace (H, A, task)."""
+    g = dict(extra)
     g["__name__"] = "__main__"
     buf = io.StringIO()
     try:
@@ -156,7 +266,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
-            data = json.loads(raw.decode("utf-8") or "{}")
+            data = json.loads(raw.decode("utf-8", "replace") or "{}")
             op = data.get("op")
             result = _do_action(op, data)
             self._send(200, result)

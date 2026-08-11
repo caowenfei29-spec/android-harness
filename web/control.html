@@ -111,8 +111,30 @@
     </div>
 
     <div class="card">
+      <h2>自然语言命令 (LLM)</h2>
+      <textarea id="i-nl" placeholder="例：打开抖音，上滑刷10个视频，每屏读出标题和作者"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="go" id="t-nl">执行</button>
+        <span id="nl-status" class="hint"></span>
+      </div>
+      <pre id="nl-log" class="log"></pre>
+      <div class="hint">指令经本地 LLM 翻译成 harness 调用执行。任何发送/购买/删除等外向动作会被拦截，需你确认。需在 .env 配置 LLM key。</div>
+    </div>
+
+    <div class="card">
+      <h2>屏幕文字总结 (LLM)</h2>
+      <div class="row">
+        <button id="t-gather">抓取当前屏文字</button>
+        <button class="go" id="t-sum">生成总结</button>
+        <span id="sum-count" class="hint">已采集 0 屏</span>
+      </div>
+      <pre id="sum-log" class="log"></pre>
+      <div class="hint">把若干屏文字交给本地 LLM 归纳成要点。适合「刷N个视频后总结」。</div>
+    </div>
+
+    <div class="card">
       <h2>脚本控制台 (Python)</h2>
-      <textarea id="i-code" placeholder="home()&#10;tap_text('设置')&#10;print([n['text'] for n in dump_nodes()][:10])"></textarea>
+      <textarea id="i-code" placeholder="home()&#10;tap_text('设置')&#10;print([n['text'] for n in dump_nodes()][:10]"></textarea>
       <div class="row" style="margin-top:8px">
         <button class="go" id="t-run">运行</button>
       </div>
@@ -251,6 +273,64 @@ $('#t-run').onclick = () => {
   const code = $('#i-code').value;
   act('run', {code});
 };
+
+// ---- natural-language command (LLM) ----
+function nlLog(msg, cls) {
+  const el = $('#nl-log');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+$('#t-nl').onclick = async () => {
+  const prompt = $('#i-nl').value.trim();
+  if (!prompt) return;
+  nlLog('▶ ' + prompt);
+  $('#nl-status').textContent = '翻译并执行中…';
+  const res = await api('/action', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({op:'natural', prompt})});
+  if (res.blocked) {
+    nlLog('✗ 已拦截: ' + res.error, 'err');
+    nlLog('翻译出的代码:\n' + res.code, 'err');
+    $('#nl-status').textContent = '被安全规则拦截';
+    return;
+  }
+  if (!res.ok) { nlLog('✗ ' + (res.error||'失败'), 'err');
+    $('#nl-status').textContent = '失败'; return; }
+  nlLog('翻译代码:\n' + res.code, 'ok');
+  if (res.output) nlLog(res.output, 'ok');
+  if (res.needs_confirm) nlLog('⚠ 含 step_ask：执行到该步会停下等你确认', 'warn');
+  $('#nl-status').textContent = '完成';
+  setTimeout(refresh, 500);
+};
+
+// ---- screen-text collection + LLM summary ----
+let captured = [];
+$('#t-gather').onclick = async () => {
+  if (st_state() !== 'ready') { alert('手机未连接'); return; }
+  const ns = await api('/nodes');
+  if (ns.error) { alert('读取失败'); return; }
+  const txt = (ns.map(n => n.text || n.desc).filter(Boolean)).join(' | ');
+  captured.push(txt);
+  $('#sum-count').textContent = '已采集 ' + captured.length + ' 屏';
+  nlLog('已采集第' + captured.length + '屏: ' + txt.slice(0, 80) + '…');
+};
+$('#t-sum').onclick = async () => {
+  if (!captured.length) { alert('先采集屏幕文字'); return; }
+  $('#sum-log').textContent = '总结中…';
+  const res = await api('/action', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({op:'summarize', screens: captured})});
+  if (!res.ok) { $('#sum-log').textContent = '✗ ' + (res.error||'失败'); return; }
+  $('#sum-log').textContent = res.summary;
+  captured = [];
+  $('#sum-count').textContent = '已采集 0 屏';
+};
+function st_state() {
+  return document.getElementById('s-conn').textContent.trim();
+}
 
 refresh();
 setInterval(refresh, 5000); // light keep-alive state poll

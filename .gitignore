@@ -19,3 +19,7 @@ Thumbs.db
 /sdcard/
 /tmp/
 ui.xml
+
+# Secrets: local LLM credentials (never push to GitHub)
+.env
+
