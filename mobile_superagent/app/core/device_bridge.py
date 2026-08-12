@@ -141,8 +141,24 @@ class AndroidDevice:
 
     # --- individual executors ---------------------------------------------
     def _launch(self, action):
-        ADB.launch(str(action.get("package_name", "")))
-        return ExecResult(True, f"launched {action.get('package_name')}")
+        """Launch a package and REPORT THE REAL foreground state, not just
+        "command issued". `am start` succeeding (or monkey fallback firing)
+        does not mean the app is actually in the foreground — a block, a cold
+        start, or a missing package can leave us on the launcher."""
+        pkg = str(action.get("package_name", ""))
+        ADB.launch(pkg)
+        time.sleep(1.0)
+        fg, act = self.current_app()
+        if fg and fg == pkg:
+            r = ExecResult(True, f"launched {pkg} (前台已确认: {fg})")
+        else:
+            r = ExecResult(False,
+                           f"launch 命令已下发但前台未切换到 {pkg}，"
+                           f"当前仍在 {fg or 'unknown'}。可能原因：应用未安装、"
+                           f"启动被拦截、冷启动较慢或有弹窗。")
+        r.data = {"foreground": fg, "activity": act, "target": pkg,
+                  "installed": self.is_installed(pkg)}
+        return r
 
     def _tap(self, action):
         ADB.tap(int(action["x"]), int(action["y"]))
@@ -166,22 +182,52 @@ class AndroidDevice:
           falling back to repeated KEYCODE_DEL).
         - submit=true -> press ENTER after typing (search / single-field).
         - Unicode (Chinese) uses ADBKeyboard; falls back to `input text`.
+
+        Input is ALWAYS preceded by clearing the field, so a stale search term
+        left over from a previous task can never masquerade as the new target.
+        After typing we re-read the field and confirm the target text is
+        actually present before reporting success.
         """
         text = str(action.get("text", ""))
         x, y = int(action["x"]), int(action["y"])
         ADB.tap(x, y)
         time.sleep(0.3)
-        if action.get("clear"):
-            self._clear_field()
+        # always clear first — stale terms from prior tasks must not leak in
+        self._clear_field()
         if text:
             try:
                 H.type_unicode(text)
             except Exception:  # noqa: BLE001
                 ADB.type_text(text)
+        # verify the field actually contains the target (not a stale leftover)
+        if text:
+            field_text = self._read_field_text()
+            target_core = text[:6]
+            if field_text and target_core not in field_text:
+                return ExecResult(
+                    False,
+                    f"输入验证失败：字段内容是 {field_text!r}，"
+                    f"而非目标 {text!r}。残留词未清除或输入未生效，请重试。")
         if action.get("submit"):
             ADB.keyevent("KEYCODE_ENTER")
             time.sleep(0.3)
         return ExecResult(True, f"typed into ({x},{y})")
+
+    def _read_field_text(self) -> str:
+        """Best-effort: read back the focused text field's content from the UI
+        dump (EditText nodes). Empty on failure — callers treat empty as OK."""
+        try:
+            path = ADB.dump_ui()
+            nodes = H._ui.parse(path)
+            for n in nodes:
+                cls = (n.get("class") or "")
+                if "EditText" in cls:
+                    txt = (n.get("text") or "").strip()
+                    if txt:
+                        return txt
+            return ""
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _clear_field(self):
         """Select-all then delete; fall back to repeated KEYCODE_DEL."""

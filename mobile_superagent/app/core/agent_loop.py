@@ -192,6 +192,28 @@ class AgentLoop:
             # execute
             exec_result = device.execute(action)
 
+            # --- launch verification (hard, code-level, not prompt-level) ---
+            # A launch_app must actually land on the target package. If the
+            # command was issued but the foreground didn't switch, inject the
+            # REAL state so the model can't claim "启动成功" and report done.
+            launch_unconfirmed = False
+            if action.get("type") == "launch_app":
+                if not exec_result.ok:
+                    launch_unconfirmed = True
+                    inst = exec_result.data.get("installed")
+                    inst_txt = "未安装" if inst is False else \
+                        ("已安装" if inst is True else "未知")
+                    self.history.append(
+                        f"{step}. launch_app 未确认前台切换！exec={exec_result.message} "
+                        f"目标包安装状态: {inst_txt}。"
+                        f"若用户目标是安装：未安装则去应用商店搜索安装；"
+                        f"若已安装则重试启动或处理拦截弹窗。"
+                        f"不得谎报'启动成功/安装完成'。")
+                else:
+                    self.history.append(
+                        f"{step}. launch_app 前台已确认: "
+                        f"{exec_result.data.get('foreground')}")
+
             # remember text for send-verification on messaging
             if action.get("type") in ("input_text", "set_clipboard"):
                 self.last_action_text = str(action.get("text", ""))
@@ -275,6 +297,26 @@ class AgentLoop:
                         "instruction": action.get("instruction", "")}
 
             if action.get("type") == "respond_to_user":
+                # Hard guard: never let the model report "启动成功/安装完成"
+                # when a launch_app just failed to reach the foreground.
+                if launch_unconfirmed:
+                    msg = action.get("message", "")
+                    if any(k in msg for k in ("启动成功", "安装完成", "已安装",
+                                              "启动成功并", "已启动")):
+                        self._emit({
+                            "type": "step", "step": step,
+                            "status": "need_user",
+                            "observe": agent_out.observe,
+                            "plan": "检测到 launch 未确认前台切换却被报告成功，"
+                                    "已拦截谎报。请先在手机上核实目标应用状态。",
+                            "action": {"type": "request_user_takeover",
+                                       "reason": "launch_app 前台切换未确认，"
+                                                 "需人工核实",
+                                       "instruction": "请在手机确认目标应用状态后点继续"},
+                        })
+                        return {"status": "need_user",
+                                "reason": "launch_app 前台切换未确认，需人工核实",
+                                "instruction": "请在手机确认目标应用状态后点继续"}
                 return {"status": agent_out.status
                         if agent_out.status in {"done", "failed"} else "done",
                         "message": action.get("message", "")}

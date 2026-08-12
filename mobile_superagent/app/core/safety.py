@@ -9,6 +9,18 @@ from typing import Any
 
 _PAY_KEYWORDS = ["支付", "付款", "confirm payment", "pay now", "立即支付",
                  "去支付", "确认支付"]
+# App names that legitimately contain "支付" (Alipay, 翼支付) — must NOT be
+# treated as a payment *action*. Stripped before keyword matching so installing
+# / opening "支付宝" never trips the payment guard.
+_PAY_APP_NAMES = ("支付宝", "翼支付")
+
+
+def _strip_pay_app_names(text: str) -> str:
+    """Remove known pay-app names so their '支付' substring can't match."""
+    out = text
+    for name in _PAY_APP_NAMES:
+        out = out.replace(name, "_APP_")
+    return out
 
 
 class SafetyGuard:
@@ -64,10 +76,21 @@ class SafetyGuard:
             if any(k in low_page for k in ["password", "密码"]) and len(text) >= 4:
                 return "疑似密码输入，转人工接管"
 
-        # 3. Payment page -> default block auto taps / typing
-        if any(k.lower() in low_page for k in _PAY_KEYWORDS):
-            if t in {"tap", "input_text"} and not self.allow_auto_pay:
-                if any(k in goal for k in ["支付", "下单并支付", "确认付款"]):
+        # 3. Payment page -> default block auto taps / typing.
+        # Strip pay-app names ("支付宝"/"翼支付") so they don't false-positive.
+        page_stripped = _strip_pay_app_names(low_page)
+        if any(k.lower() in page_stripped for k in _PAY_KEYWORDS):
+            # App-store detail pages (user asked to INSTALL something) legitimately
+            # show "支付/理财" marketing text — that is not a payment action.
+            # Exempt the payment guard when the goal is to install/open an app
+            # AND the page is a store detail (has 安装/INSTALL + install count).
+            install_intent = any(k in goal for k in ("安装", "下载", "打开", "安装应用", "装 "))
+            store_detail = ("安装" in page_text) or ("install" in page_stripped)
+            if install_intent and store_detail:
+                pass  # installing from a store detail page is not paying
+            elif t in {"tap", "input_text"} and not self.allow_auto_pay:
+                if any(k in _strip_pay_app_names(goal)
+                       for k in ["支付", "下单并支付", "确认付款"]):
                     return "支付确认需人工接管"
                 return "检测到支付页，默认拦截自动操作"
 

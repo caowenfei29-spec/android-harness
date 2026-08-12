@@ -166,3 +166,130 @@ def test_target_package_extract():
     assert loop._target_package() == "com.tencent.mm"
     loop.goal = "随便"
     assert loop._target_package() is None
+
+
+def test_alipay_install_not_blocked_as_payment():
+    """'安装支付宝' must NOT trip the payment guard (支付宝 is an app name,
+    not a payment action). Both page text with 翼支付 and the goal must pass."""
+    g = safety.SafetyGuard()
+    # goal contains 支付宝, page shows launcher with 翼支付 icon
+    block = g.check("帮我安装支付宝",
+                    {"type": "launch_app", "package_name": "com.eg.android.AlipayGphone"},
+                    page_text="桌面 翼支付 微信 拨号")
+    assert block is None
+
+
+def test_real_payment_still_blocked():
+    g = safety.SafetyGuard()
+    block = g.check("帮我买这个", {"type": "tap", "x": 1, "y": 2},
+                    page_text="确认支付 100元")
+    assert block is not None
+    assert "支付" in block
+
+
+def test_store_detail_page_exempt_from_payment_guard():
+    """Installing an app from a store detail page (which shows 支付/理财 marketing
+    text) is NOT a payment action — must not be blocked."""
+    g = safety.SafetyGuard()
+    block = g.check(
+        "帮我安装支付宝",
+        {"type": "tap", "x": 1, "y": 2},
+        page_text="支付宝 198.4亿次安装 174MB 生活缴费 支付 理财 贷款 [安装]")
+    assert block is None
+
+
+def test_real_payment_still_blocked_even_with_install_word():
+    """A genuine payment page must still be blocked even if '安装' happens to
+    appear — the payment guard only exempts INSTALL-intent goals."""
+    g = safety.SafetyGuard()
+    block = g.check(
+        "帮我买这个",  # NOT an install goal
+        {"type": "tap", "x": 1, "y": 2},
+        page_text="确认支付 100元 [安装]")
+    assert block is not None
+    assert "支付" in block
+
+
+# --- launch_app foreground verification (web 安装支付宝谎报 bug) -----------
+
+def test_launch_requires_foreground_switch():
+    """A launch_app whose command issued but foreground didn't switch must
+    report failure with the real state, so the agent can't claim success."""
+    import app.core.device_bridge as br
+    class FakeDevice(br.AndroidDevice):
+        def __init__(self):
+            self.serial = "fake"
+        def _pin(self): pass
+        def is_installed(self, pkg): return True
+
+    orig_launch = br.ADB.launch
+    orig_current_app = br.AndroidDevice.current_app
+    br.ADB.launch = lambda pkg: None
+    br.AndroidDevice.current_app = lambda self: ("com.oppo.launcher", "Launcher")
+    try:
+        d = FakeDevice()
+        r = d._launch({"package_name": "com.eg.android.AlipayGphone"})
+        assert not r.ok  # foreground stayed on launcher -> must be failure
+        assert "未切换" in r.message
+        assert r.data["installed"] is True
+    finally:
+        br.ADB.launch = orig_launch
+        br.AndroidDevice.current_app = orig_current_app
+
+
+def test_launch_confirmed_when_foreground_switches():
+    import app.core.device_bridge as br
+    class FakeDevice(br.AndroidDevice):
+        def __init__(self):
+            self.serial = "fake"
+        def _pin(self): pass
+        def is_installed(self, pkg): return True
+
+    orig_launch = br.ADB.launch
+    orig_current_app = br.AndroidDevice.current_app
+    br.ADB.launch = lambda pkg: None
+    br.AndroidDevice.current_app = lambda self: ("com.eg.android.AlipayGphone", "X")
+    try:
+        d = FakeDevice()
+        r = d._launch({"package_name": "com.eg.android.AlipayGphone"})
+        assert r.ok
+        assert "前台已确认" in r.message
+    finally:
+        br.ADB.launch = orig_launch
+        br.AndroidDevice.current_app = orig_current_app
+
+
+# --- input_text always clears + verifies (残留搜索词漂移 bug) --------------
+
+def test_input_always_clears_and_verifies():
+    """Typing must always clear the field first (stale search terms from a prior
+    task must not masquerade as the new target) and re-read to verify."""
+    import app.core.device_bridge as br
+    calls = []
+
+    class FakeDevice(br.AndroidDevice):
+        def __init__(self):
+            self.serial = "fake"
+        def _pin(self): pass
+        def _read_field_text(self): return "抖音"  # stale leftover that survived
+
+    orig_tap, orig_clear, orig_unicode = br.ADB.tap, br.AndroidDevice._clear_field, \
+        br.helpers.type_unicode if hasattr(br, "helpers") else None
+    br.ADB.tap = lambda x, y: calls.append(("tap", x, y))
+    br.AndroidDevice._clear_field = lambda self: calls.append(("clear",))
+    import android_harness.helpers as H
+    orig_type = H.type_unicode
+    H.type_unicode = lambda t: calls.append(("type", t))
+    try:
+        d = FakeDevice()
+        r = d._input_text({"x": 100, "y": 200, "text": "支付宝"})
+        # clear called before type
+        assert ("clear",) in calls
+        assert ("type", "支付宝") in calls
+        # field still shows stale text -> verification fails, no false success
+        assert not r.ok
+        assert "残留" in r.message
+    finally:
+        br.ADB.tap = orig_tap
+        br.AndroidDevice._clear_field = orig_clear
+        H.type_unicode = orig_type
