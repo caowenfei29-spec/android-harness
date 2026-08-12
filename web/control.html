@@ -3,337 +3,387 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>android-harness 控制台</title>
+<title>手机助手 · android-harness</title>
 <style>
-  :root { --bg:#0f1115; --panel:#1a1d24; --line:#2a2f3a; --fg:#e6e6e6;
-          --accent:#4f9dff; --ok:#39d98a; --warn:#ffb454; --err:#ff6b6b; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:14px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
-  header { display:flex; gap:16px; align-items:center; padding:10px 16px;
-           background:var(--panel); border-bottom:1px solid var(--line);
-           flex-wrap:wrap; }
-  header h1 { font-size:15px; margin:0; font-weight:600; }
-  .stat { font-size:12px; color:#9aa3b2; }
-  .stat b { color:var(--fg); font-weight:600; }
-  .wrap { display:flex; gap:16px; padding:16px; align-items:flex-start;
-          flex-wrap:wrap; }
-  .stage { position:relative; flex:1 1 360px; min-width:300px;
-           background:#000; border:1px solid var(--line); border-radius:10px;
-           overflow:hidden; }
-  #screen { display:block; width:100%; height:auto; cursor:crosshair; }
-  #overlay { position:absolute; inset:0; pointer-events:none; }
-  .node { position:absolute; border:1px solid rgba(79,157,255,.0);
-          pointer-events:auto; cursor:pointer; }
-  .node:hover { border-color:var(--accent);
-                background:rgba(79,157,255,.12); }
-  .flash { position:absolute; width:18px; height:18px; margin:-9px 0 0 -9px;
-           border:2px solid var(--ok); border-radius:50%; pointer-events:none;
-           animation:pop .4s ease-out forwards; }
-  @keyframes pop { from{transform:scale(.4);opacity:1}
-                   to{transform:scale(1.6);opacity:0} }
-  .side { flex:0 0 320px; display:flex; flex-direction:column; gap:14px; }
-  .card { background:var(--panel); border:1px solid var(--line);
-          border-radius:10px; padding:12px; }
-  .card h2 { font-size:13px; margin:0 0 10px; color:#9aa3b2;
-             text-transform:uppercase; letter-spacing:.04em; }
-  .row { display:flex; gap:8px; flex-wrap:wrap; }
-  button { background:var(--line); color:var(--fg); border:1px solid #3a4150;
-           border-radius:8px; padding:7px 11px; cursor:pointer; font-size:13px; }
-  button:hover { border-color:var(--accent); }
-  button.go { background:var(--accent); color:#06121f; border-color:var(--accent);
-              font-weight:600; }
-  button.toggle.on { background:var(--ok); color:#06121f; border-color:var(--ok); }
-  input, textarea { width:100%; background:#0c0e12; color:var(--fg);
-                    border:1px solid var(--line); border-radius:8px;
-                    padding:7px 9px; font-size:13px; }
-  textarea { resize:vertical; min-height:120px; font-family:ui-monospace,Menlo,Consolas,monospace; }
-  .chips { display:flex; flex-wrap:wrap; gap:6px; max-height:180px;
-           overflow:auto; }
-  .chip { background:#222732; border:1px solid #333b49; border-radius:14px;
-          padding:4px 10px; font-size:12px; cursor:pointer; }
-  .chip:hover { border-color:var(--accent); }
-  #log { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
-         white-space:pre-wrap; max-height:150px; overflow:auto; color:#9aa3b2; }
-  .ok { color:var(--ok); } .err { color:var(--err); }
-  .hint { color:#6b7280; font-size:11px; margin-top:6px; }
+  :root{
+    --bg:#0b0e13; --bg2:#0f131a; --panel:#141923; --panel2:#1a2130;
+    --line:#232c3d; --line2:#2e3a52;
+    --fg:#eef2f8; --muted:#8b96a8; --faint:#5b6575;
+    --accent:#5b8cff; --accent2:#7aa2ff; --accent-dim:rgba(91,140,255,.14);
+    --ok:#3fd18a; --warn:#ffb454; --err:#ff6b7a;
+    --grad:linear-gradient(135deg,#5b8cff,#8a5bff);
+    --radius:16px; --shadow:0 10px 34px rgba(0,0,0,.45);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:
+      radial-gradient(1200px 500px at 85% -10%, rgba(91,140,255,.10), transparent 60%),
+      radial-gradient(900px 400px at -10% 110%, rgba(138,91,255,.08), transparent 60%),
+      var(--bg);
+      color:var(--fg);
+      font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,"PingFang SC","Microsoft YaHei",sans-serif;
+      display:flex; flex-direction:column; height:100vh; overflow:hidden;}
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-thumb{background:#2a3448;border-radius:4px}
+
+  /* ===== top bar ===== */
+  header{display:flex;align-items:center;gap:14px;padding:12px 22px;
+         background:rgba(15,19,26,.72);backdrop-filter:blur(10px);
+         border-bottom:1px solid var(--line);flex-shrink:0;z-index:5}
+  .logo{width:34px;height:34px;border-radius:10px;background:var(--grad);
+        display:grid;place-items:center;font-size:17px;box-shadow:0 4px 14px rgba(91,140,255,.35)}
+  header h1{font-size:15px;font-weight:700}
+  header .sub{font-size:11px;color:var(--faint);margin-top:1px}
+  .spacer{flex:1}
+  .pill{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);
+        background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:5px 12px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .dot.off{background:var(--err);box-shadow:0 0 8px var(--err)}
+  .pill b{color:var(--fg);font-weight:600}
+
+  /* ===== main ===== */
+  main{flex:1;display:flex;flex-direction:column;min-height:0;padding:16px 22px;gap:14px}
+
+  /* phone stage (hero) */
+  .stage{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;
+         background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);
+         box-shadow:inset 0 0 60px rgba(0,0,0,.4);overflow:hidden}
+  .phone{position:relative;height:100%;aspect-ratio:1080/2340;max-height:100%;
+         border-radius:26px;border:1px solid var(--line2);
+         box-shadow:0 0 0 8px #0a0d12, 0 24px 60px rgba(0,0,0,.55);overflow:hidden;background:#000}
+  #screen{display:block;width:100%;height:100%;object-fit:contain;cursor:crosshair}
+  #overlay{position:absolute;inset:0;pointer-events:none}
+  .node{position:absolute;border:1px solid rgba(91,140,255,.0);pointer-events:auto;cursor:pointer}
+  .node:hover{border-color:var(--accent);background:rgba(91,140,255,.14)}
+  .flash{position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;
+         border:2px solid var(--accent2);border-radius:50%;pointer-events:none;
+         animation:pop .45s ease-out forwards;box-shadow:0 0 14px var(--accent-dim)}
+  @keyframes pop{from{transform:scale(.3);opacity:1}to{transform:scale(1.8);opacity:0}}
+  .stage-empty{color:var(--faint);font-size:14px;text-align:center;padding:30px;line-height:1.8}
+  .stage-empty .big{font-size:42px;display:block;margin-bottom:12px}
+  .banner{position:absolute;top:16px;left:50%;transform:translateX(-50%);
+         background:rgba(255,107,122,.14);border:1px solid rgba(255,107,122,.4);
+         color:var(--err);padding:8px 16px;border-radius:12px;font-size:13px;display:none;z-index:6}
+  .banner.show{display:flex;align-items:center;gap:8px}
+
+  /* ===== bottom: conversation + task ===== */
+  .bottom{flex-shrink:0;display:flex;flex-direction:column;gap:10px;max-height:46%;
+          min-height:0}
+  .taskcard{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+            box-shadow:var(--shadow);overflow:hidden;display:none;flex-direction:column;min-height:0}
+  .taskcard.show{display:flex}
+  .taskcard .head{display:flex;align-items:center;gap:10px;padding:12px 16px;
+         border-bottom:1px solid var(--line);flex-shrink:0}
+  .taskcard .head .prompt{font-size:13.5px;color:var(--fg);font-weight:600;flex:1;
+         overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .taskcard .head .status-tag{font-size:11px;padding:4px 10px;border-radius:12px;
+         background:var(--panel2);color:var(--muted);flex-shrink:0}
+  .taskcard .head .status-tag.running{background:var(--accent-dim);color:var(--accent2)}
+  .taskcard .head .status-tag.done{background:rgba(63,209,138,.14);color:var(--ok)}
+  .taskcard .head .status-tag.error{background:rgba(255,107,122,.14);color:var(--err)}
+  .taskcard .head .status-tag.awaiting{background:rgba(255,180,84,.14);color:var(--warn)}
+  .taskcard .body{overflow-y:auto;padding:12px 16px;min-height:0}
+
+  .plan-line{display:flex;gap:10px;align-items:flex-start;font-size:13px;color:var(--muted);
+         margin-bottom:12px}
+  .plan-line .lbl{color:var(--faint);font-size:11px;letter-spacing:.06em;margin-top:3px;flex-shrink:0}
+  .plan-line .txt{color:var(--fg);font-size:13px;line-height:1.6}
+
+  /* step flow */
+  .steps{display:flex;flex-direction:column;gap:6px}
+  .step{display:flex;gap:12px;align-items:flex-start;padding:9px 12px;border-radius:12px;
+        background:var(--panel2);border:1px solid var(--line)}
+  .step .ic{width:22px;height:22px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;
+        font-size:11px;border:1px solid var(--line2);color:var(--faint);margin-top:1px}
+  .step.pending .ic{background:var(--panel)}
+  .step.running{border-color:var(--accent);background:var(--accent-dim)}
+  .step.running .ic{border-color:var(--accent);color:var(--accent2);animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{opacity:.5}}
+  .step.done .ic{background:rgba(63,209,138,.16);border-color:var(--ok);color:var(--ok)}
+  .step.error .ic{background:rgba(255,107,122,.16);border-color:var(--err);color:var(--err)}
+  .step.awaiting{border-color:var(--warn);background:rgba(255,180,84,.08)}
+  .step.awaiting .ic{border-color:var(--warn);color:var(--warn)}
+  .step .txt{flex:1;min-width:0}
+  .step .name{font-size:13px;color:var(--fg);font-weight:600}
+  .step .st{font-size:11px;color:var(--faint);margin-top:1px}
+  .step .out{font-size:11px;color:var(--muted);margin-top:5px;font-family:ui-monospace,Menlo,Consolas,monospace;
+        white-space:pre-wrap;word-break:break-word;max-height:90px;overflow:auto}
+  .step.awaiting .ask{display:flex;gap:8px;margin-top:8px}
+  .step .ask{display:none}
+  .btn{background:var(--panel2);color:var(--fg);border:1px solid var(--line2);
+        border-radius:10px;padding:7px 14px;cursor:pointer;font-size:12.5px;transition:all .15s}
+  .btn:hover{border-color:var(--accent)}
+  .btn.go{background:var(--grad);color:#fff;border:none;font-weight:600}
+  .btn.go:hover{opacity:.9}
+  .btn.warn{background:transparent;color:var(--err);border:1px solid var(--err)}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+
+  .result{margin-top:12px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .result .rt{font-size:11px;color:var(--faint);letter-spacing:.06em;margin-bottom:6px}
+  .result .rtxt{font-size:13.5px;color:var(--fg);line-height:1.7;white-space:pre-wrap}
+  .result .rsub{font-size:12px;color:var(--muted);margin-top:6px}
+
+  /* composer */
+  .composer{display:flex;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--line2);
+            border-radius:16px;padding:10px 12px;box-shadow:var(--shadow);flex-shrink:0;
+            transition:border-color .2s, box-shadow .2s}
+  .composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
+  .composer textarea{flex:1;background:transparent;border:none;outline:none;color:var(--fg);
+         font-size:15px;font-family:inherit;resize:none;padding:6px 4px;max-height:120px;line-height:1.5}
+  .composer textarea::placeholder{color:var(--faint)}
+  .send{width:44px;height:44px;border-radius:13px;border:none;background:var(--grad);color:#fff;
+        cursor:pointer;display:grid;place-items:center;font-size:18px;transition:transform .15s, opacity .2s;
+        box-shadow:0 4px 14px rgba(91,140,255,.35);flex-shrink:0}
+  .send:hover{transform:translateY(-1px)}
+  .send:active{transform:scale(.95)}
+  .send:disabled{opacity:.4;cursor:not-allowed;transform:none}
+  .hint{font-size:11px;color:var(--faint);text-align:center;padding:0 0 2px;flex-shrink:0}
+
+  /* modal confirm */
+  .mask{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(3px);
+        display:none;align-items:center;justify-content:center;z-index:20}
+  .mask.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line2);border-radius:18px;
+         width:min(420px,90vw);padding:22px;box-shadow:var(--shadow)}
+  .modal h3{font-size:15px;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+  .modal .q{font-size:13.5px;color:var(--muted);line-height:1.7;margin-bottom:18px;white-space:pre-wrap}
+  .modal .acts{display:flex;gap:10px;justify-content:flex-end}
+
+  .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--accent-dim);
+        border-top-color:var(--accent);border-radius:50%;animation:rot .8s linear infinite;vertical-align:-2px;margin-left:6px}
+  @keyframes rot{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
+
 <header>
-  <h1>📱 android-harness 控制台</h1>
-  <span class="stat">连接: <b id="s-conn">…</b></span>
-  <span class="stat">当前应用: <b id="s-app">…</b></span>
-  <span class="stat">分辨率: <b id="s-size">…</b></span>
-  <span class="stat">中文输入: <b id="s-kbd">…</b></span>
+  <div class="logo">📱</div>
+  <div>
+    <h1>手机助手</h1>
+    <div class="sub">android-harness · AI 感知真实世界</div>
+  </div>
+  <div class="spacer"></div>
+  <span class="pill"><span id="d-conn" class="dot off"></span>连接: <b id="s-conn">…</b></span>
 </header>
 
-<div class="wrap">
-  <div class="stage">
-    <img id="screen" alt="phone screen" />
-    <div id="overlay"></div>
+<main>
+  <!-- phone hero -->
+  <div class="stage" id="stage">
+    <div class="banner" id="banner">⚠ 手机未连接 — 请插入 USB 并开启 USB 调试</div>
+    <div class="stage-empty" id="stageEmpty">
+      <span class="big">📲</span>
+      等待连接手机…
+      <div style="margin-top:8px;font-size:12px">连接后这里显示手机实时画面</div>
+    </div>
+    <div class="phone" id="phone" style="display:none">
+      <img id="screen" alt="phone screen"/>
+      <div id="overlay"></div>
+    </div>
   </div>
 
-  <div class="side">
-    <div class="card">
-      <h2>操控</h2>
-      <div class="row">
-        <button class="go" data-act="home">Home</button>
-        <button data-act="back">Back</button>
-        <button id="t-refresh">刷新截图</button>
-        <button id="t-auto" class="toggle">自动刷新</button>
-        <button id="t-nodes" class="toggle">显示控件</button>
+  <!-- bottom: task + composer -->
+  <div class="bottom">
+    <div class="taskcard" id="taskcard">
+      <div class="head">
+        <span class="prompt" id="t-prompt"></span>
+        <span class="status-tag" id="t-status"></span>
       </div>
-      <div class="hint">点击截图任意处 = 点击该坐标；开启"显示控件"后可直接点控件框。</div>
+      <div class="body" id="t-body"></div>
     </div>
 
-    <div class="card">
-      <h2>按文字点击</h2>
-      <div id="labels" class="chips"><span class="hint">刷新后显示可点击文字</span></div>
+    <div class="composer">
+      <textarea id="i-nl" rows="1" placeholder="用自然语言指挥手机…  （Enter 发送 / Shift+Enter 换行）"></textarea>
+      <button class="send" id="t-send" title="发送">➤</button>
     </div>
+    <div class="hint">AI 先规划 → 你确认后分步执行 → 外向操作会停下来等你批准</div>
+  </div>
+</main>
 
-    <div class="card">
-      <h2>输入文字</h2>
-      <input id="i-text" placeholder="要输入的文字" />
-      <div class="row" style="margin-top:8px">
-        <button data-type="ascii">输入 (ASCII)</button>
-        <button class="go" data-type="unicode">输入中文/Unicode</button>
-      </div>
-      <div class="hint">ASCII 用 adb input；中文需 ADBKeyboard（已自动临时切换输入法，不打扰日常键盘）。</div>
-    </div>
-
-    <div class="card">
-      <h2>打开应用</h2>
-      <input id="i-app" placeholder="桌面图标名称，如 微信" />
-      <div class="row" style="margin-top:8px">
-        <button class="go" data-open="1">打开</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>自然语言命令 (LLM)</h2>
-      <textarea id="i-nl" placeholder="例：打开抖音，上滑刷10个视频，每屏读出标题和作者"></textarea>
-      <div class="row" style="margin-top:8px">
-        <button class="go" id="t-nl">执行</button>
-        <span id="nl-status" class="hint"></span>
-      </div>
-      <pre id="nl-log" class="log"></pre>
-      <div class="hint">指令经本地 LLM 翻译成 harness 调用执行。任何发送/购买/删除等外向动作会被拦截，需你确认。需在 .env 配置 LLM key。</div>
-    </div>
-
-    <div class="card">
-      <h2>屏幕文字总结 (LLM)</h2>
-      <div class="row">
-        <button id="t-gather">抓取当前屏文字</button>
-        <button class="go" id="t-sum">生成总结</button>
-        <span id="sum-count" class="hint">已采集 0 屏</span>
-      </div>
-      <pre id="sum-log" class="log"></pre>
-      <div class="hint">把若干屏文字交给本地 LLM 归纳成要点。适合「刷N个视频后总结」。</div>
-    </div>
-
-    <div class="card">
-      <h2>脚本控制台 (Python)</h2>
-      <textarea id="i-code" placeholder="home()&#10;tap_text('设置')&#10;print([n['text'] for n in dump_nodes()][:10]"></textarea>
-      <div class="row" style="margin-top:8px">
-        <button class="go" id="t-run">运行</button>
-      </div>
-      <pre id="log"></pre>
+<!-- confirm modal -->
+<div class="mask" id="mask">
+  <div class="modal">
+    <h3>⚠ 需要你确认</h3>
+    <div class="q" id="m-q"></div>
+    <div class="acts">
+      <button class="btn warn" id="m-cancel">取消</button>
+      <button class="btn go" id="m-ok">批准执行</button>
     </div>
   </div>
 </div>
 
 <script>
-const $ = sel => document.querySelector(sel);
-let screenW = 1080, screenH = 2340;
-let showNodes = false, autoTimer = null;
+const $ = s => document.querySelector(s);
+let screenW=1080, screenH=2340, curTask=null, pollTimer=null, showNodes=false;
 
-async function api(path, opts) {
+async function api(path, opts){
   const r = await fetch(path, opts);
   return r.json();
 }
-function log(msg, cls) {
-  const el = $('#log');
-  const line = document.createElement('div');
-  if (cls) line.className = cls;
-  line.textContent = msg;
-  el.appendChild(line);
-  el.scrollTop = el.scrollHeight;
+const esc = s => { const d=document.createElement('div'); d.textContent=s==null?'':s; return d.innerHTML; };
+const STEP_IC = {pending:'·', running:'…', done:'✓', error:'✗', awaiting:'?', cancelled:'–'};
+const STEP_ST = {pending:'等待执行', running:'执行中…', done:'完成', error:'失败', awaiting:'等待确认', cancelled:'已取消'};
+
+function setConn(state){
+  const d=$('#d-conn'), c=$('#s-conn');
+  c.textContent = state==='ready' ? '已连接' : (state||'未连接');
+  d.className = 'dot ' + (state==='ready' ? 'on' : 'off');
+  $('#banner').classList.toggle('show', state!=='ready');
+  $('#phone').style.display = state==='ready' ? '' : 'none';
+  $('#stageEmpty').style.display = state==='ready' ? 'none' : '';
 }
-async function act(op, body) {
-  const data = Object.assign({op}, body);
-  const res = await api('/action', {method:'POST',
-    headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
-  if (res.ok) { log('✓ ' + op + (res.output ? '' : ''), 'ok'); if (res.output) log(res.output); }
-  else { log('✗ ' + (res.error||'failed'), 'err'); }
-  if (op !== 'home' && op !== 'back') setTimeout(refresh, 400);
-  return res;
+async function refresh(){
+  let st; try{ st=await api('/state'); }catch(e){ return; }
+  setConn(st.state);
+  if(st.state!=='ready') return;
+  if(st.size){ screenW=st.size[0]; screenH=st.size[1]; }
+  const img=new Image();
+  img.onload=()=>{ $('#screen').src='/screen?'+Date.now(); };
+  img.src='/screen?'+Date.now();
+  if(showNodes) drawNodes();
 }
-async function refresh() {
-  let st;
-  try { st = await api('/state'); } catch(e) { return; }
-  $('#s-conn').textContent = st.state;
-  $('#s-app').textContent = st.package || '—';
-  $('#s-size').textContent = st.size ? st.size.join('×') : '—';
-  $('#s-kbd').textContent = st.adbkeyboard ? '已装' : '未装';
-  if (st.state !== 'ready') {
-    $('#s-conn').style.color = 'var(--err)';
-    $('#screen').style.opacity = .3;
-    return;
-  }
-  $('#s-conn').style.color = 'var(--ok)';
-  $('#screen').style.opacity = 1;
-  if (st.size) { screenW = st.size[0]; screenH = st.size[1]; }
-  $('#screen').src = '/screen?' + Date.now();
-  if (showNodes) await drawNodes(); else await loadLabels();
-}
-async function drawNodes() {
-  const ns = await api('/nodes');
-  const ov = $('#overlay'); ov.innerHTML = '';
-  if (ns.error) return;
-  for (const n of ns) {
-    const b = n.bounds; if (!b) continue;
-    const d = document.createElement('div');
-    d.className = 'node';
-    d.style.left = (b[0]/screenW*100) + '%';
-    d.style.top = (b[1]/screenH*100) + '%';
-    d.style.width = ((b[2]-b[0])/screenW*100) + '%';
-    d.style.height = ((b[3]-b[1])/screenH*100) + '%';
-    const tip = n.text || n.desc;
-    if (tip) d.title = tip;
-    d.onclick = (e) => { e.stopPropagation(); flash(b[0],b[1]); act('tap',{x:n.x,y:n.y}); };
+async function drawNodes(){
+  const ns=await api('/nodes'); const ov=$('#overlay'); ov.innerHTML='';
+  if(ns.error) return;
+  for(const n of ns){
+    const b=n.bounds; if(!b) continue;
+    const d=document.createElement('div'); d.className='node';
+    d.style.left=(b[0]/screenW*100)+'%'; d.style.top=(b[1]/screenH*100)+'%';
+    d.style.width=((b[2]-b[0])/screenW*100)+'%'; d.style.height=((b[3]-b[1])/screenH*100)+'%';
+    const tip=n.text||n.desc; if(tip) d.title=tip;
+    d.onclick=e=>{e.stopPropagation();flash(b[0],b[1]);post('tap',{x:n.x,y:n.y});};
     ov.appendChild(d);
   }
 }
-async function loadLabels() {
-  const ns = await api('/nodes');
-  const box = $('#labels'); box.innerHTML = '';
-  if (ns.error) { box.innerHTML = '<span class="hint">无法读取</span>'; return; }
-  const seen = new Set();
-  for (const n of ns) {
-    const label = n.text || n.desc;
-    if (!label || !n.clickable) continue;
-    if (seen.has(label)) continue; seen.add(label);
-    const c = document.createElement('span');
-    c.className = 'chip'; c.textContent = label;
-    c.onclick = () => act('tap', {x:n.x, y:n.y});
-    box.appendChild(c);
+function flash(x,y){
+  const f=document.createElement('div'); f.className='flash';
+  f.style.left=(x/screenW*100)+'%'; f.style.top=(y/screenH*100)+'%';
+  $('#overlay').appendChild(f); setTimeout(()=>f.remove(),450);
+}
+async function post(op, body){
+  const r=await api('/action',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(Object.assign({op},body||{}))});
+  return r;
+}
+$('#screen').addEventListener('click', e=>{
+  if(showNodes) return;
+  const r=e.currentTarget.getBoundingClientRect();
+  const x=Math.round((e.clientX-r.left)/r.width*screenW);
+  const y=Math.round((e.clientY-r.top)/r.height*screenH);
+  flash(x,y); post('tap',{x,y});
+});
+
+// ===== TASK RENDERING =====
+const STATUS_TXT = {planned:'已规划', running:'执行中', awaiting:'等待确认', done:'已完成', error:'失败', cancelled:'已取消'};
+const STATUS_CLS = {planned:'', running:'running', awaiting:'awaiting', done:'done', error:'error', cancelled:''};
+
+function renderTask(){
+  const t=curTask; if(!t) return;
+  const card=$('#taskcard'); card.classList.add('show');
+  $('#t-prompt').textContent = t.prompt || '任务';
+  const st=$('#t-status');
+  st.textContent = (STATUS_TXT[t.status]||t.status) + (t.status==='running'?'<span class="spin"></span>':'');
+  st.className='status-tag '+(STATUS_CLS[t.status]||'');
+  st.style.cssText='';
+
+  const body=$('#t-body'); body.innerHTML='';
+  // planning line
+  const plan=document.createElement('div'); plan.className='plan-line';
+  plan.innerHTML='<span class="lbl">PLAN</span><span class="txt">'+esc(t.plan_text)+'</span>';
+  body.appendChild(plan);
+  // steps
+  const steps=document.createElement('div'); steps.className='steps';
+  (t.steps||[]).forEach((s,i)=>{
+    const el=document.createElement('div');
+    el.className='step '+s.status;
+    const ic=s.status==='running' ? STEP_IC.running : (STEP_IC[s.status]||'·');
+    el.innerHTML='<div class="ic">'+ic+'</div>'+
+      '<div class="txt"><div class="name">'+esc(s.name)+'</div>'+
+      '<div class="st">'+(STEP_ST[s.status]||s.status)+'</div>'+
+      (s.output?'<div class="out">'+esc(s.output)+'</div>':'')+
+      (s.status==='awaiting'?
+        '<div class="ask"><button class="btn go" data-a="ok">批准</button>'+
+        '<button class="btn warn" data-a="no">取消</button></div>':'')+
+      '</div>';
+    // confirm buttons
+    const okB=el.querySelector('[data-a="ok"]');
+    if(okB) okB.onclick=()=>{ askConfirm(s, i); };
+    const noB=el.querySelector('[data-a="no"]');
+    if(noB) noB.onclick=()=>{ post('cancel',{id:t.id}); };
+    steps.appendChild(el);
+  });
+  body.appendChild(steps);
+  // result
+  if(t.result){
+    const r=document.createElement('div'); r.className='result';
+    const done = t.result.done;
+    r.innerHTML='<div class="rt">结果</div>'+
+      '<div class="rtxt">'+esc(t.result.reason)+'</div>';
+    body.appendChild(r);
   }
-  if (!box.children.length) box.innerHTML = '<span class="hint">无可点击文字</span>';
+  // done -> stop polling, allow new input
+  if(['done','error','cancelled'].includes(t.status)){
+    if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+    enableInput(true);
+  }
 }
-function flash(x, y) {
-  const f = document.createElement('div');
-  f.className = 'flash';
-  f.style.left = (x/screenW*100) + '%';
-  f.style.top = (y/screenH*100) + '%';
-  $('#overlay').appendChild(f);
-  setTimeout(() => f.remove(), 420);
+function askConfirm(step, idx){
+  $('#m-q').textContent = step.confirm_text || ('批准执行「'+step.name+'」？');
+  const ok=()=>{ $('#mask').classList.remove('show'); $('#m-ok').onclick=null; $('#m-cancel').onclick=null;
+    post('continue',{id:curTask.id,index:idx}); };
+  const cancel=()=>{ $('#mask').classList.remove('show'); $('#m-ok').onclick=null; $('#m-cancel').onclick=null;
+    post('cancel',{id:curTask.id}); };
+  $('#m-ok').onclick=ok; $('#m-cancel').onclick=cancel;
+  $('#mask').classList.add('show');
 }
 
-// screenshot click → tap at mapped coords
-$('#screen').addEventListener('click', (e) => {
-  if (showNodes) return; // node boxes handle clicks
-  const r = e.currentTarget.getBoundingClientRect();
-  const x = Math.round((e.clientX - r.left) / r.width * screenW);
-  const y = Math.round((e.clientY - r.top) / r.height * screenH);
-  flash(x, y);
-  act('tap', {x, y});
-});
-
-// buttons
-document.querySelectorAll('[data-act]').forEach(b => {
-  b.onclick = () => act(b.dataset.act, {});
-});
-$('#t-refresh').onclick = refresh;
-$('#t-auto').onclick = function() {
-  this.classList.toggle('on');
-  if (this.classList.contains('on')) {
-    autoTimer = setInterval(refresh, 1500);
-    log('自动刷新 开');
-  } else { clearInterval(autoTimer); log('自动刷新 关'); }
-};
-$('#t-nodes').onclick = function() {
-  showNodes = !showNodes;
-  this.classList.toggle('on', showNodes);
-  $('#overlay').innerHTML = '';
-  if (showNodes) drawNodes(); else loadLabels();
-};
-document.querySelectorAll('[data-type]').forEach(b => {
-  b.onclick = () => {
-    const t = $('#i-text').value;
-    if (!t) return;
-    act(b.dataset.type === 'unicode' ? 'type_unicode' : 'type', {text:t});
-  };
-});
-$('[data-open]').onclick = () => {
-  const n = $('#i-app').value.trim();
-  if (n) act('open', {name:n});
-};
-$('#t-run').onclick = () => {
-  const code = $('#i-code').value;
-  act('run', {code});
-};
-
-// ---- natural-language command (LLM) ----
-function nlLog(msg, cls) {
-  const el = $('#nl-log');
-  const line = document.createElement('div');
-  if (cls) line.className = cls;
-  line.textContent = msg;
-  el.appendChild(line);
-  el.scrollTop = el.scrollHeight;
+// ===== SEND =====
+function enableInput(on){
+  $('#t-send').disabled=!on;
+  $('#i-nl').disabled=!on;
 }
-$('#t-nl').onclick = async () => {
-  const prompt = $('#i-nl').value.trim();
-  if (!prompt) return;
-  nlLog('▶ ' + prompt);
-  $('#nl-status').textContent = '翻译并执行中…';
-  const res = await api('/action', {method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({op:'natural', prompt})});
-  if (res.blocked) {
-    nlLog('✗ 已拦截: ' + res.error, 'err');
-    nlLog('翻译出的代码:\n' + res.code, 'err');
-    $('#nl-status').textContent = '被安全规则拦截';
+$('#t-send').onclick=sendNL;
+$('#i-nl').addEventListener('keydown', e=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendNL(); }
+});
+$('#i-nl').addEventListener('input', ()=>{ const t=$('#i-nl'); t.style.height='auto'; t.style.height=t.scrollHeight+'px'; });
+async function sendNL(){
+  const prompt=$('#i-nl').value.trim();
+  if(!prompt || curTask) return;
+  $('#i-nl').value=''; $('#i-nl').style.height='auto';
+  enableInput(false);
+  // empty card with "thinking"
+  $('#taskcard').classList.add('show');
+  $('#t-prompt').textContent=prompt;
+  $('#t-status').className='status-tag running';
+  $('#t-status').textContent='思考规划<span class="spin"></span>';
+  $('#t-body').innerHTML='<div class="plan-line" style="color:var(--muted)">正在理解你的意图并规划步骤…</div>';
+  const res=await post('plan',{prompt});
+  if(!res.ok){
+    $('#t-status').className='status-tag error';
+    $('#t-status').textContent='规划失败';
+    $('#t-body').innerHTML='<div class="plan-line"><span class="lbl">PLAN</span><span class="txt err">'+esc(res.error||'失败')+'</span></div>';
+    enableInput(true);
     return;
   }
-  if (!res.ok) { nlLog('✗ ' + (res.error||'失败'), 'err');
-    $('#nl-status').textContent = '失败'; return; }
-  nlLog('翻译代码:\n' + res.code, 'ok');
-  if (res.output) nlLog(res.output, 'ok');
-  if (res.needs_confirm) nlLog('⚠ 含 step_ask：执行到该步会停下等你确认', 'warn');
-  $('#nl-status').textContent = '完成';
-  setTimeout(refresh, 500);
-};
-
-// ---- screen-text collection + LLM summary ----
-let captured = [];
-$('#t-gather').onclick = async () => {
-  if (st_state() !== 'ready') { alert('手机未连接'); return; }
-  const ns = await api('/nodes');
-  if (ns.error) { alert('读取失败'); return; }
-  const txt = (ns.map(n => n.text || n.desc).filter(Boolean)).join(' | ');
-  captured.push(txt);
-  $('#sum-count').textContent = '已采集 ' + captured.length + ' 屏';
-  nlLog('已采集第' + captured.length + '屏: ' + txt.slice(0, 80) + '…');
-};
-$('#t-sum').onclick = async () => {
-  if (!captured.length) { alert('先采集屏幕文字'); return; }
-  $('#sum-log').textContent = '总结中…';
-  const res = await api('/action', {method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({op:'summarize', screens: captured})});
-  if (!res.ok) { $('#sum-log').textContent = '✗ ' + (res.error||'失败'); return; }
-  $('#sum-log').textContent = res.summary;
-  captured = [];
-  $('#sum-count').textContent = '已采集 0 屏';
-};
-function st_state() {
-  return document.getElementById('s-conn').textContent.trim();
+  curTask=res.task;
+  renderTask();
+  // auto-execute (safe: all steps AST-whitelisted; outward ones wait at step)
+  const ex=await post('execute',{id:curTask.id});
+  if(ex.ok) startPolling();
+}
+function startPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer=setInterval(async ()=>{
+    if(!curTask) return;
+    const t=await api('/task/'+curTask.id);
+    if(t && !t.error){ curTask=t; renderTask(); }
+    if(['done','error','cancelled'].includes(t.status)){ clearInterval(pollTimer); pollTimer=null; }
+  }, 600);
 }
 
 refresh();
-setInterval(refresh, 5000); // light keep-alive state poll
+setInterval(refresh, 5000);
 </script>
 </body>
 </html>

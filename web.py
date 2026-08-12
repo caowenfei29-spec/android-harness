@@ -16,6 +16,9 @@ import io
 import json
 import os
 import sys
+import threading
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -26,11 +29,13 @@ from android_harness import helpers as H  # noqa: E402
 from android_harness import adb as A      # noqa: E402
 from android_harness import ui as UI       # noqa: E402
 try:
-    from llm import translate, summarize, configured as llm_configured
+    from llm import translate, summarize, plan, configured as llm_configured
 except Exception:  # noqa: BLE001
     translate = summarize = None
     def llm_configured():
         return False
+    def plan(*a, **k):
+        raise RuntimeError("LLM 模块加载失败")
 
 
 # Outward / destructive actions that must NEVER run without a human step_ask.
@@ -113,7 +118,179 @@ def _require_ready():
             "debugging, approve the prompt, then retry." % st)
 
 
+# ===========================================================================
+# Task engine — Airtap-style: plan -> step-by-step execute with live status
+# ===========================================================================
+# Each step has {name, code, needs_confirm, confirm_text, status, output}.
+# status: pending -> running -> done | error | awaiting_confirm
+# Tasks live in a dict keyed by id; a background thread drives them so the
+# HTTP request returns immediately and the frontend polls GET /task/<id>.
+_TASKS = {}
+_TASKS_LOCK = threading.Lock()
+
+
+def _new_task(plan_text, steps):
+    tid = uuid.uuid4().hex[:12]
+    task = {
+        "id": tid, "plan_text": plan_text,
+        "prompt": "", "steps": steps, "status": "planned",
+        "result": None, "created": time.time(),
+    }
+    with _TASKS_LOCK:
+        _TASKS[tid] = task
+    return task
+
+
+def _exec_step_code(code, extra):
+    """Run one step's code in a namespace with H/A/time, capture stdout."""
+    g = dict(extra)
+    g["__name__"] = "__main__"
+    g.setdefault("time", __import__("time"))
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            exec(code, g)
+        return {"ok": True, "output": buf.getvalue()}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "output": "ERROR: %s: %s" % (type(e).__name__, e)}
+
+
+def _worker(tid):
+    """Drive the task's steps in a background thread, updating status live."""
+    task = _TASKS.get(tid)
+    if not task:
+        return
+    task["status"] = "running"
+    ns = {"H": H, "A": A, "task": task_mod()}
+    for step in task["steps"]:
+        step["status"] = "running"
+        # confirmation gate: pause and wait for human before outward step
+        if step.get("needs_confirm"):
+            step["status"] = "awaiting_confirm"
+            task["status"] = "awaiting_confirm"
+            step["_event"] = threading.Event()
+            step["_event"].wait(timeout=3600)
+            step.pop("_event", None)
+            if task.get("_cancelled"):
+                step["status"] = "cancelled"
+                task["status"] = "cancelled"
+                task["result"] = {"done": False, "reason": "用户取消"}
+                return
+            step["status"] = "running"
+            task["status"] = "running"
+        res = _exec_step_code(step["code"], ns)
+        step["output"] = res["output"]
+        step["status"] = "done" if res["ok"] else "error"
+        if not res["ok"]:
+            task["status"] = "error"
+            task["result"] = {"done": False, "reason": res["output"]}
+            return
+        try:
+            H.wait_stable()
+        except Exception:  # noqa: BLE001
+            pass
+    task["status"] = "done"
+    task["result"] = {"done": True, "reason": "全部步骤完成"}
+
+
+def task_mod():
+    from android_harness import task
+    return task
+
+
+def _cancel_task(tid):
+    with _TASKS_LOCK:
+        t = _TASKS.get(tid)
+        if t:
+            t["_cancelled"] = True
+            for s in t["steps"]:
+                if s.get("_event"):
+                    s["_event"].set()
+
+
+def _public_task(t):
+    """Serialize a task for the frontend, stripping internal fields."""
+    if t is None:
+        return None
+    steps = []
+    for s in t.get("steps", []):
+        pub = {k: s.get(k) for k in
+               ("name", "code", "needs_confirm", "confirm_text",
+                "status", "output")}
+        steps.append(pub)
+    return {
+        "id": t.get("id"), "prompt": t.get("prompt"),
+        "plan_text": t.get("plan_text"), "status": t.get("status"),
+        "result": t.get("result"), "steps": steps,
+        "created": t.get("created"),
+    }
+
+
 def _do_action(op, data):
+    if op == "plan":
+        if not llm_configured():
+            return {"ok": False, "error": "LLM 未配置：在 .env 设置 "
+                    "LLM_BASE_URL/LLM_API_KEY/LLM_MODEL"}
+        prompt = str(data.get("prompt", "")).strip()
+        if not prompt:
+            return {"ok": False, "error": "空指令"}
+        try:
+            plan_data = plan(prompt)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": "规划失败: %s" % e}
+        # AST-whitelist each step now (fail fast before any execution)
+        steps = []
+        for s in plan_data.get("steps", []):
+            ok, reason = _safe_code(s.get("code", ""))
+            if not ok:
+                return {"ok": False, "error": "计划含未授权步骤「%s」: %s"
+                        % (s.get("name", ""), reason)}
+            s = dict(s)
+            s.setdefault("status", "pending")
+            s.setdefault("output", "")
+            steps.append(s)
+        task = _new_task(plan_data.get("plan_text", "执行你的指令"), steps)
+        task["prompt"] = prompt
+        return {"ok": True, "task": _public_task(task)}
+    elif op == "execute":
+        tid = str(data.get("id", ""))
+        with _TASKS_LOCK:
+            t = _TASKS.get(tid)
+        if not t:
+            return {"ok": False, "error": "任务不存在"}
+        if t["status"] not in ("planned",):
+            return {"ok": False, "error": "任务已开始"}
+        threading.Thread(target=_worker, args=(tid,), daemon=True).start()
+        return {"ok": True, "task": _public_task(t)}
+    elif op == "continue":
+        # human approved an awaiting_confirm step; release it
+        tid = str(data.get("id", ""))
+        step_idx = int(data.get("index", -1))
+        with _TASKS_LOCK:
+            t = _TASKS.get(tid)
+        if not t:
+            return {"ok": False, "error": "任务不存在"}
+        if 0 <= step_idx < len(t["steps"]):
+            ev = t["steps"][step_idx].get("_event")
+            if ev:
+                ev.set()
+        return {"ok": True, "task": _public_task(t)}
+    elif op == "cancel":
+        tid = str(data.get("id", ""))
+        _cancel_task(tid)
+        return {"ok": True}
+    elif op == "summarize":
+        if not llm_configured():
+            return {"ok": False, "error": "LLM 未配置"}
+        screens = data.get("screens") or []
+        if not screens:
+            return {"ok": False, "error": "没有可总结的屏幕文字"}
+        try:
+            summary = summarize([str(s) for s in screens])
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": "总结失败: %s" % e}
+        return {"ok": True, "summary": summary}
+
     if op == "tap":
         _require_ready()
         A.tap(int(data["x"]), int(data["y"]))
@@ -165,17 +342,6 @@ def _do_action(op, data):
         result["code"] = code
         result["needs_confirm"] = "step_ask" in code
         return result
-    elif op == "summarize":
-        if not llm_configured():
-            return {"ok": False, "error": "LLM 未配置"}
-        screens = data.get("screens") or []
-        if not screens:
-            return {"ok": False, "error": "没有可总结的屏幕文字"}
-        try:
-            summary = summarize([str(s) for s in screens])
-        except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": "总结失败: %s" % e}
-        return {"ok": True, "summary": summary}
     else:
         raise RuntimeError("unknown op %r" % op)
     return {"ok": True}
@@ -256,6 +422,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, Path(p).read_bytes(), "image/png")
             except Exception as e:  # noqa: BLE001
                 self._send(500, {"error": str(e)})
+            return
+        if path.startswith("/task/"):
+            tid = path[len("/task/"):]
+            with _TASKS_LOCK:
+                t = _TASKS.get(tid)
+            self._send(200, _public_task(t) or {"error": "任务不存在"})
             return
         self._send(404, "not found")
 
