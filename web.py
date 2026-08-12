@@ -43,8 +43,8 @@ except Exception:  # noqa: BLE001
 # an LLM can phrase forbidden actions in Chinese or variants that keyword scans
 # miss. Only calls to the names below are allowed to execute.
 _ALLOWED_CALLS = {
-    "launch", "tap_text", "tap_res_id", "scroll_screen", "dump_nodes",
-    "screen_info", "run_task",
+    "launch", "open_app", "tap_text", "tap_res_id", "scroll_screen",
+    "dump_nodes", "screen_info", "run_task",
     "step_open", "step_tap", "step_tap_id", "step_type",
     "step_type_unicode", "step_wait", "step_ask",
     # safe builtins the translator legitimately uses for read/format only

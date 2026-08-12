@@ -159,13 +159,19 @@ _PLAN_SYSTEM = """你是一个手机操作规划器。用户会给一个中文�
 
 你能调用的手机原语（每个步骤的 code 字段只能调用这些，且只用读取/导航/打开/点击/上滑/等待）：
 
-  H.launch("应用名或包名")          # 打开应用
+  H.open_app("应用中文名")        # 打开应用【中文名时用这个】——回桌面点图标，靠桌面标签匹配
+  H.launch("包名")                # 打开应用【知道包名时用这个，最可靠】——如 "com.tencent.mm"
   H.tap_text("屏幕上的文字")          # 按文字点击
   H.tap_res_id("resource-id")        # 按 id 点击
   H.scroll_screen(direction="up")    # 上滑（刷视频/翻页）
   H.dump_nodes()                     # 读当前屏所有可交互节点（list[dict]）
   H.screen_info()                    # 读屏幕/应用状态（dict）
   time.sleep(秒)                     # 等待加载
+
+打开应用的规则：
+- 如果你能确定包名（如 com.tencent.mm=微信、com.ss.android.ugc.aweme=抖音、com.android.vending=Play商店），
+  优先用 H.launch("包名")，最可靠。
+- 不确定包名时，用 H.open_app("应用中文名") 回桌面点图标。
 
 严格规则：
 1. **只有只读/导航动作**能放进 code：打开、点击、上滑、读屏、等待。

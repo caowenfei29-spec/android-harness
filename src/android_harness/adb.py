@@ -274,12 +274,24 @@ def dump_ui(pull=True):
 
 
 def launch(pkg, activity=None):
-    """Launch an app by package (and optional activity) via `am start`."""
+    """Launch an app by package (and optional activity) via `am start`.
+
+    Falls back to `monkey -p <pkg> ... 1` if `am start` can't resolve the
+    intent — needed on some ColorOS / dual-app setups where `-p` resolution
+    fails even though the package is installed.
+    """
     if activity:
         run("shell", "am", "start", "-n", f"{pkg}/{activity}", timeout=15)
     else:
-        run("shell", "am", "start", "-a", "android.intent.action.MAIN",
-            "-c", "android.intent.category.LAUNCHER", "-p", pkg, timeout=15)
+        cp = run("shell", "am", "start", "-a", "android.intent.action.MAIN",
+                 "-c", "android.intent.category.LAUNCHER", "-p", pkg,
+                 timeout=15, check=False)
+        if cp.returncode != 0 or "unable to resolve" in (
+                cp.stdout + cp.stderr).lower():
+            # am start couldn't resolve -> try monkey (robust on ColorOS)
+            run("shell", "monkey", "-p", pkg,
+                "-c", "android.intent.category.LAUNCHER", "1",
+                timeout=30, check=False)
     time.sleep(1.0)
 
 
