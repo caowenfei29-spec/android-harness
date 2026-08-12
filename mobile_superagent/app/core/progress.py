@@ -4,10 +4,16 @@ Compares the last N steps: foreground package, UI text fingerprint, screenshot
 perceptual hash, and action type. If all are identical for `window` steps, the
 agent is told to change strategy; after `fail_after` consecutive warnings the
 loop fails out.
+
+Robustness: clock/status-bar text changes every second (e.g. a desktop showing
+a live clock), which would otherwise make `same_ui` false forever and defeat
+stagnation detection. We NORMALIZE time-of-day tokens (HH:MM / H:MM) out of the
+UI text fingerprint so a ticking clock can't mask a stuck loop.
 """
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 
 try:
@@ -16,6 +22,11 @@ try:
     _HAS_IMAGEHASH = True
 except Exception:  # noqa: BLE001
     _HAS_IMAGEHASH = False
+
+# Ticking clock / status-bar time — the #1 source of "UI keeps changing" noise.
+# No word-boundaries: a Chinese char before the digits is still part of the
+# word, so \b would fail to match "现在是14:22".
+_CLOCK_RE = re.compile(r"\d{1,2}:\d{2}")
 
 
 @dataclass
@@ -33,8 +44,13 @@ class ProgressTracker:
         self.items: list[StepFingerprint] = []
 
     @staticmethod
-    def _ui_hash(ui_text: str) -> str:
-        return hashlib.md5(ui_text.encode("utf-8")).hexdigest()[:12]
+    def _normalize(ui_text: str) -> str:
+        """Strip time-of-day tokens so a ticking clock can't mask a stuck loop."""
+        return _CLOCK_RE.sub("TIME", ui_text or "")
+
+    @classmethod
+    def _ui_hash(cls, ui_text: str) -> str:
+        return hashlib.md5(cls._normalize(ui_text).encode("utf-8")).hexdigest()[:12]
 
     @staticmethod
     def _img_hash(path: str) -> str:

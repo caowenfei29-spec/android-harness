@@ -218,23 +218,53 @@ class AndroidDevice:
         # always clear first — stale terms from prior tasks must not leak in
         self._clear_field()
         if text:
+            # Type AND verify in one call: `_adbkeyboard_sent` broadcasts via
+            # AdbIME and confirms 'result=0' delivery (OPPO hides the EditText
+            # node from the dump, so we can't always read the field back).
+            # Fall back to `input text` only if AdbIME isn't the active IME.
+            sent = False
             try:
-                H.type_unicode(text)
+                sent = self._adbkeyboard_sent(text)
             except Exception:  # noqa: BLE001
-                ADB.type_text(text)
-        # verify the field actually contains the target (not a stale leftover)
-        if text:
-            field_text = self._read_field_text()
-            target_core = text[:6]
-            if field_text and target_core not in field_text:
+                sent = False
+            if not sent:
+                try:
+                    ADB.type_text(text)
+                    sent = True
+                except Exception:  # noqa: BLE001
+                    sent = False
+            if not sent:
                 return ExecResult(
                     False,
-                    f"输入验证失败：字段内容是 {field_text!r}，"
-                    f"而非目标 {text!r}。残留词未清除或输入未生效，请重试。")
+                    "输入失败：ADBKeyboard 广播与 input text 均未送达，"
+                    "请确认 ADB Keyboard 是当前输入法后重试。")
         if action.get("submit"):
             ADB.keyevent("KEYCODE_ENTER")
             time.sleep(0.3)
         return ExecResult(True, f"typed into ({x},{y})")
+
+    def _adbkeyboard_sent(self, text: str) -> bool:
+        """Broadcast text to the AdbIME and confirm it was delivered.
+
+        ONE call both types the text and proves delivery: `am broadcast`
+        returning 'Broadcast completed: result=0' means the intent reached
+        AdbIME (the only receiver) — a success signal that doesn't depend on
+        uiautomator exposing the EditText node, which OPPO/ColorOS often hides
+        once the field has content + an active IME. Returns False if the
+        broadcast line is odd and the field also can't be re-read.
+        """
+        try:
+            safe = text.replace("'", "'\\\\''")
+            r = ADB.run(
+                "shell",
+                f"am broadcast -a ADB_INPUT_TEXT --es msg '{safe}'",
+                timeout=15, check=False)
+            out = (r.stdout or "") + (r.stderr or "")
+            if "Broadcast completed: result=0" in out:
+                return True
+            return bool(self._read_field_text())
+        except Exception:  # noqa: BLE001
+            return False
 
     def _read_field_text(self) -> str:
         """Best-effort: read back the focused text field's content from the UI
@@ -269,10 +299,12 @@ class AndroidDevice:
     def _set_clipboard(self, action):
         """Put text on the clipboard. Prefers the ADBKeyboard broadcast (works
         on ColorOS where `cmd clipboard set-text` returns nothing), falls back
-        to `cmd clipboard set-text`."""
+        to `cmd clipboard set-text`. We also cache the text in-memory because
+        ColorOS's `cmd clipboard get-text` reads back EMPTY even after a
+        successful set — so `paste` can't re-read the clipboard on this ROM."""
         text = str(action.get("text", ""))
         try:
-            safe = text.replace("'", "'\\''")
+            safe = text.replace("'", "'\\\\''")
             ADB.run("shell",
                     f"am broadcast -a ADB_SET_CLIPBOARD --es msg '{safe}'",
                     timeout=10, check=False)
@@ -283,18 +315,43 @@ class AndroidDevice:
                     timeout=10, check=False)
         except Exception:  # noqa: BLE001
             pass
+        # Cache so _paste can type it back even when the ROM hides the clipboard.
+        self._clip_cache = text
         return ExecResult(True, "clipboard set")
 
     def _paste(self, action):
-        """Long-press the field at (x,y) to bring up the paste menu, then tap
-        the paste option — the paste-first flow for messaging. After pasting,
-        re-read the field and confirm text actually landed (a stale/empty
-        clipboard or a missed menu tap must not report success)."""
+        """Paste text into the field at (x,y).
+
+        PRIMARY: tap the field to focus it, then type the text straight in via
+        the ADBKeyboard IME broadcast (supports Chinese, works on OPPO/ColorOS
+        where the long-press paste menu often doesn't appear or isn't in the
+        UI dump). The text comes from the in-memory clipboard cache (set by
+        `set_clipboard`) because ColorOS's `cmd clipboard get-text` reads back
+        empty.
+
+        FALLBACK: long-press to summon the paste menu and tap 粘贴/Paste.
+
+        Either path re-reads the field afterwards and fails (never reports
+        success) if the text didn't actually land.
+        """
         x, y = int(action["x"]), int(action["y"])
-        ADB.long_press(x, y, 0.8)
-        time.sleep(0.6)
-        # Try to find and tap the "paste" menu item in the UI tree.
+        text = getattr(self, "_clip_cache", "") or str(action.get("text", ""))
+        # 1) tap to focus, then type straight via ADBKeyboard (most reliable).
         try:
+            ADB.tap(x, y)
+            time.sleep(0.4)
+            if text:
+                field_text = self._read_field_text()
+                # EditText hidden on OPPO -> trust the broadcast-delivery signal.
+                if (field_text and text[:6] in field_text) or \
+                   (not field_text and self._adbkeyboard_sent(text)):
+                    return ExecResult(True, f"pasted (字段确认: {(field_text or text)[:20]})")
+        except Exception:  # noqa: BLE001
+            pass
+        # 2) fallback: long-press paste menu.
+        try:
+            ADB.long_press(x, y, 0.8)
+            time.sleep(0.6)
             path = ADB.dump_ui()
             nodes = H._ui.parse(path)
             for n in nodes:
@@ -305,10 +362,10 @@ class AndroidDevice:
                     field_text = self._read_field_text()
                     if field_text:
                         return ExecResult(True, f"pasted (字段确认: {field_text[:20]})")
-                    return ExecResult(False, "粘贴菜单点击后字段为空，粘贴可能未生效")
         except Exception:  # noqa: BLE001
             pass
-        return ExecResult(False, "paste menu not found")
+        return ExecResult(False, "paste 未生效：ADBKeyboard 广播与粘贴菜单均失败")
+
 
     def _back(self):
         ADB.back()

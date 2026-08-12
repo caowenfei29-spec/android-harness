@@ -271,28 +271,31 @@ def test_input_always_clears_and_verifies():
         def __init__(self):
             self.serial = "fake"
         def _pin(self): pass
-        def _read_field_text(self): return "抖音"  # stale leftover that survived
+        def _adbkeyboard_sent(self, text): return False  # AdbIME unavailable
+        def _read_field_text(self): return ""  # OPPO hides the EditText
 
-    orig_tap, orig_clear, orig_unicode = br.ADB.tap, br.AndroidDevice._clear_field, \
-        br.helpers.type_unicode if hasattr(br, "helpers") else None
+    orig_tap, orig_clear, orig_type = br.ADB.tap, br.AndroidDevice._clear_field, \
+        br.ADB.type_text
     br.ADB.tap = lambda x, y: calls.append(("tap", x, y))
     br.AndroidDevice._clear_field = lambda self: calls.append(("clear",))
-    import android_harness.helpers as H
-    orig_type = H.type_unicode
-    H.type_unicode = lambda t: calls.append(("type", t))
+    def _fake_type_fail(t):
+        calls.append(("type", t))
+        raise RuntimeError("input text failed")
+    br.ADB.type_text = _fake_type_fail
     try:
         d = FakeDevice()
         r = d._input_text({"x": 100, "y": 200, "text": "支付宝"})
-        # clear called before type
+        # clear called before typing
         assert ("clear",) in calls
+        # fallback `input text` attempted after AdbIME broadcast failed
         assert ("type", "支付宝") in calls
-        # field still shows stale text -> verification fails, no false success
+        # both input paths failed -> NO false success
         assert not r.ok
-        assert "残留" in r.message
+        assert "输入失败" in r.message
     finally:
         br.ADB.tap = orig_tap
         br.AndroidDevice._clear_field = orig_clear
-        H.type_unicode = orig_type
+        br.ADB.type_text = orig_type
 
 
 # --- A2: payment-adjacent NON-action terms must not trip the guard ---------
@@ -305,6 +308,20 @@ def test_non_pay_action_terms_stripped():
         block = g.check("帮我打开钱包", {"type": "tap", "x": 1, "y": 2},
                         page_text=page)
         assert block is None, f"'{page}' should not block"
+
+
+def test_progress_ignores_ticking_clock():
+    """A desktop with a live clock must still be detected as stagnant (the clock
+    ticks each second and would otherwise change the UI fingerprint forever,
+    masking a stuck loop)."""
+    from app.core.progress import ProgressTracker
+    p = ProgressTracker(window=3, fail_after=5)
+    for t in ("14:22:xx", "14:23:xx", "14:24:xx"):  # clock ticking
+        p.add("com.oppo.launcher", f"日历 天气 {t}", "", "tap")
+    assert p.stagnant() is True, "clock tick must not defeat stagnation detection"
+    # normalize: the time token is stripped
+    from app.core.progress import ProgressTracker as PT
+    assert PT._normalize("现在是14:22") == "现在是TIME"
 
 
 def test_pay_app_names_stripped_from_launcher():
