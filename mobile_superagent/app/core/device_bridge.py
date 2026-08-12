@@ -118,7 +118,7 @@ class AndroidDevice:
         self._pin()
         try:
             return {
-                "get_state": lambda: ExecResult(True, "ok"),
+                "get_state": lambda: self._get_state(),
                 "launch_app": lambda: self._launch(action),
                 "tap": lambda: self._tap(action),
                 "long_press": lambda: self._long_press(action),
@@ -144,20 +144,43 @@ class AndroidDevice:
         """Launch a package and REPORT THE REAL foreground state, not just
         "command issued". `am start` succeeding (or monkey fallback firing)
         does not mean the app is actually in the foreground — a block, a cold
-        start, or a missing package can leave us on the launcher."""
+        start, or a missing package can leave us on the launcher.
+
+        Retries the foreground check a couple of times (cold starts on OPPO can
+        take >1s), then reports a precise, actionable failure.
+        """
         pkg = str(action.get("package_name", ""))
         ADB.launch(pkg)
-        time.sleep(1.0)
-        fg, act = self.current_app()
-        if fg and fg == pkg:
+        fg, act = "", ""
+        for _ in range(3):
+            time.sleep(1.0)
+            fg, act = self.current_app()
+            if fg == pkg:
+                break
+        if fg == pkg:
             r = ExecResult(True, f"launched {pkg} (前台已确认: {fg})")
         else:
             r = ExecResult(False,
                            f"launch 命令已下发但前台未切换到 {pkg}，"
                            f"当前仍在 {fg or 'unknown'}。可能原因：应用未安装、"
-                           f"启动被拦截、冷启动较慢或有弹窗。")
+                           f"冷启动较慢、启动被拦截或有弹窗。")
+        installed = self.is_installed(pkg)
         r.data = {"foreground": fg, "activity": act, "target": pkg,
-                  "installed": self.is_installed(pkg)}
+                  "installed": installed}
+        if not r.ok and not installed:
+            r.message += f"（{pkg} 未安装，需先安装再启动）"
+        return r
+
+    def _get_state(self):
+        """get_state now returns REAL perception instead of an empty 'ok', so
+        the model gets fresh foreground/lock/IME/install facts (not just the
+        pre-action snapshot already in the prompt)."""
+        fg, act = self.current_app()
+        r = ExecResult(True,
+                       f"foreground={fg or 'unknown'}, activity={act or 'unknown'}, "
+                       f"locked={self.is_locked()}, ime={self.current_ime()}")
+        r.data = {"foreground": fg, "activity": act, "locked": self.is_locked(),
+                  "ime": self.current_ime()}
         return r
 
     def _tap(self, action):
@@ -264,7 +287,9 @@ class AndroidDevice:
 
     def _paste(self, action):
         """Long-press the field at (x,y) to bring up the paste menu, then tap
-        the paste option — the paste-first flow for messaging."""
+        the paste option — the paste-first flow for messaging. After pasting,
+        re-read the field and confirm text actually landed (a stale/empty
+        clipboard or a missed menu tap must not report success)."""
         x, y = int(action["x"]), int(action["y"])
         ADB.long_press(x, y, 0.8)
         time.sleep(0.6)
@@ -276,7 +301,11 @@ class AndroidDevice:
                 label = (n.get("text") or n.get("desc") or "").strip()
                 if label in ("粘贴", "Paste"):
                     ADB.tap(n["x"], n["y"])
-                    return ExecResult(True, "pasted")
+                    time.sleep(0.4)
+                    field_text = self._read_field_text()
+                    if field_text:
+                        return ExecResult(True, f"pasted (字段确认: {field_text[:20]})")
+                    return ExecResult(False, "粘贴菜单点击后字段为空，粘贴可能未生效")
         except Exception:  # noqa: BLE001
             pass
         return ExecResult(False, "paste menu not found")

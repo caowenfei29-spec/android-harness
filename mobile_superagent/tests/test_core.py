@@ -293,3 +293,43 @@ def test_input_always_clears_and_verifies():
         br.ADB.tap = orig_tap
         br.AndroidDevice._clear_field = orig_clear
         H.type_unicode = orig_type
+
+
+# --- A2: payment-adjacent NON-action terms must not trip the guard ---------
+
+def test_non_pay_action_terms_stripped():
+    """App screens with '支持支付/免密支付/付款方式' (feature text, not a payment
+    action) must NOT be blocked."""
+    g = safety.SafetyGuard()
+    for page in ("设置 - 支持支付 免密支付", "钱包 - 付款方式 快捷支付"):
+        block = g.check("帮我打开钱包", {"type": "tap", "x": 1, "y": 2},
+                        page_text=page)
+        assert block is None, f"'{page}' should not block"
+
+
+def test_pay_app_names_stripped_from_launcher():
+    """Launcher with 支付宝 + 翼支付 icons must not trip the payment guard."""
+    g = safety.SafetyGuard()
+    block = g.check("打开桌面", {"type": "tap", "x": 1, "y": 2},
+                    page_text="支付宝 翼支付 微信 相机")
+    assert block is None
+
+
+# --- A4: get_state returns real perception, not an empty 'ok' --------------
+
+def test_get_state_returns_perception():
+    import app.core.device_bridge as br
+    class FakeDevice(br.AndroidDevice):
+        def __init__(self):
+            self.serial = "fake"
+        def _pin(self): pass
+        def current_app(self): return ("com.tencent.mm", "ChattingUI")
+        def is_locked(self): return False
+        def current_ime(self): return "com.adbkeyboard/.AdbIME"
+
+    d = FakeDevice()
+    r = d._get_state()
+    assert r.ok
+    assert r.data["foreground"] == "com.tencent.mm"
+    assert r.data["activity"] == "ChattingUI"
+    assert "foreground=com.tencent.mm" in r.message

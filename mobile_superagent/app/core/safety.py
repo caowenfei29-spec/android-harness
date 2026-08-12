@@ -13,13 +13,20 @@ _PAY_KEYWORDS = ["支付", "付款", "confirm payment", "pay now", "立即支付
 # treated as a payment *action*. Stripped before keyword matching so installing
 # / opening "支付宝" never trips the payment guard.
 _PAY_APP_NAMES = ("支付宝", "翼支付")
+# Payment-adjacent but NON-action terms that commonly appear on launcher/app
+# screens (app categories, app titles) and must not trigger the payment guard.
+_NON_PAY_TERMS = (
+    "支付功能", "支付服务", "支付安全", "支付体验", "支持支付", "快捷支付",
+    "指纹支付", "人脸支付", "免密支付", "支付中心", "支付钱包", "付款方式",
+)
 
 
 def _strip_pay_app_names(text: str) -> str:
-    """Remove known pay-app names so their '支付' substring can't match."""
+    """Remove known pay-app names and non-action payment terms so their '支付'
+    substring can't match the payment guard."""
     out = text
-    for name in _PAY_APP_NAMES:
-        out = out.replace(name, "_APP_")
+    for name in (*_PAY_APP_NAMES, *_NON_PAY_TERMS):
+        out = out.replace(name, "_N_")
     return out
 
 

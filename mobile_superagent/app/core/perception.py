@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,33 +72,35 @@ def capture_state(bridge, run_dir, step: int, ocr: bool = True,
     is checked for installation so the model knows whether it must install it.
     """
     st = CaptureState()
+    run_dir = Path(run_dir)
     try:
         pkg, act = bridge.current_app()
         st.foreground_package = pkg or ""
         st.activity = act or ""
     except Exception:  # noqa: BLE001
         pass
-    # lock screen / IME heuristics (cheap dumpsys; best-effort)
-    try:
-        st.locked = bridge.is_locked() if hasattr(bridge, "is_locked") else False
-    except Exception:  # noqa: BLE001
-        st.locked = False
-    try:
-        st.ime = bridge.current_ime() if hasattr(bridge, "current_ime") else ""
-    except Exception:  # noqa: BLE001
-        st.ime = ""
-    if target_package and hasattr(bridge, "is_installed"):
-        try:
-            st.target_installed = bridge.is_installed(target_package)
-        except Exception:  # noqa: BLE001
-            st.target_installed = None
-    try:
-        st.size = bridge.screen_size()
-    except Exception:  # noqa: BLE001
-        st.size = None
 
-    try:
-        nodes = bridge.dump_nodes()
+    # All remaining independent ADB probes run in PARALLEL (dump, screenshot,
+    # lock, ime, install, size). This collapses ~5 serial calls (~1s of adb
+    # startup each) + dump + screenshot into one shot; the whole pass is bounded
+    # by the slowest probe, not their sum.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        f_dump = pool.submit(_safe_dump, bridge)
+        f_shot = pool.submit(_safe_shot, bridge,
+                             str(run_dir / f"step{step:02d}.png"))
+        f_locked = pool.submit(_safe_locked, bridge)
+        f_ime = pool.submit(_safe_ime, bridge)
+        f_size = pool.submit(_safe_size, bridge)
+        f_inst = (pool.submit(_safe_installed, bridge, target_package)
+                  if target_package else None)
+        nodes = _result(f_dump, _DUMP_TIMEOUT)
+        spath = _result(f_shot, _SHOT_TIMEOUT)
+        st.locked = _result(f_locked, 3.0) or False
+        st.ime = _result(f_ime, 3.0) or ""
+        st.size = _result(f_size, 3.0)
+        st.target_installed = _result(f_inst, 3.0) if f_inst else None
+
+    if nodes:
         st.ui_nodes = nodes
         texts = []
         for n in nodes:
@@ -108,19 +111,54 @@ def capture_state(bridge, run_dir, step: int, ocr: bool = True,
             clickable = " (可点)" if n.get("clickable") else ""
             texts.append(f"{label}{clickable} @({x},{y})")
         st.ui_dump = "\n".join(texts[:60])
-    except Exception:  # noqa: BLE001
-        st.ui_dump = ""
-
-    # screenshot + OCR
-    try:
-        spath = str(run_dir / f"step{step:02d}.png")
-        path = bridge.screenshot(spath)
-        st.screenshot_path = path or ""
-    except Exception:  # noqa: BLE001
-        st.screenshot_path = ""
+    st.screenshot_path = spath or ""
     if st.screenshot_path and ocr:
         st.screen_ocr = _ocr_image(st.screenshot_path)
     return st
+
+
+# Per-call hard timeouts so a hung adb/uiautomator can't stall a round.
+_DUMP_TIMEOUT = 12.0
+_SHOT_TIMEOUT = 15.0
+
+
+def _result(future, timeout):
+    if future is None:
+        return None
+    try:
+        return future.result(timeout=timeout)
+    except (FutTimeout, Exception):  # noqa: BLE001
+        return None
+
+
+def _safe_dump(bridge):
+    return bridge.dump_nodes()
+
+
+def _safe_shot(bridge, path):
+    return bridge.screenshot(path)
+
+
+def _safe_locked(bridge):
+    return bridge.is_locked() if hasattr(bridge, "is_locked") else False
+
+
+def _safe_ime(bridge):
+    return bridge.current_ime() if hasattr(bridge, "current_ime") else ""
+
+
+def _safe_size(bridge):
+    try:
+        return bridge.screen_size()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _safe_installed(bridge, target_package):
+    try:
+        return bridge.is_installed(target_package)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def state_to_prompt(st: CaptureState) -> str:

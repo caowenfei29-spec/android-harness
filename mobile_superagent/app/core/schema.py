@@ -62,6 +62,24 @@ def parse_agent_output(data: dict) -> tuple[AgentOutput, dict]:
     if atype not in ACTION_TYPES:
         raise ValueError("off-whitelist action type %r" % atype)
 
+    # Coordinate/arg completeness — a malformed action (e.g. tap without x/y)
+    # would otherwise throw mid-execution and waste a full LLM round.
+    _REQUIRED = {
+        "tap": ("x", "y"),
+        "long_press": ("x", "y"),
+        "swipe": ("x1", "y1", "x2", "y2"),
+        "input_text": ("x", "y", "text"),
+        "set_clipboard": ("text",),
+        "launch_app": ("package_name",),
+        "open_url": ("url",),
+        "play_store_search": ("app_name",),
+        "uninstall_app": ("package_name",),
+        "wait": ("seconds",),
+    }
+    missing = [k for k in _REQUIRED.get(atype, ()) if action.get(k) in (None, "")]
+    if missing:
+        raise ValueError(f"action {atype} 缺少必需字段: {', '.join(missing)}")
+
     status = data.get("status", "running")
     if status not in {"running", "need_user", "done", "failed"}:
         status = "running"
