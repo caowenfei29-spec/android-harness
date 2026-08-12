@@ -50,6 +50,8 @@ _ALLOWED_CALLS = {
     # safe builtins the translator legitimately uses for read/format only
     "print", "len", "range", "list", "str", "int", "dict", "set",
     "enumerate", "zip", "sorted", "tuple", "bool", "float",
+    # time.sleep — pure wait, safe (guarded below to only allow via time module)
+    "sleep",
 }
 _IMPORT_ALLOWED = {"time", "json"}
 
