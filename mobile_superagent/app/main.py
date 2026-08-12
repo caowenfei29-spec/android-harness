@@ -8,15 +8,34 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from . import db
-from .settings import settings
+from .web.routes import router as web_router
 from .api import devices, tasks, routines, profile
 
-app = FastAPI(title="mobile_superagent", version="0.1.0")
+
+class NoCacheStaticFiles(StaticFiles):
+    """Serve static assets with no-cache headers so dev edits show immediately."""
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if resp.status_code < 400:
+            resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return resp
+
+
+app = FastAPI(title="Mobile Superagent", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
     allow_headers=["*"])
 
+# static assets (css/js)
+_web_static = Path(__file__).resolve().parent / "web" / "static"
+app.mount("/static", NoCacheStaticFiles(directory=str(_web_static)),
+          name="static")
+
+# web console pages
+app.include_router(web_router)
+
+# api
 app.include_router(devices.router)
 app.include_router(tasks.router)
 app.include_router(routines.router)
@@ -31,18 +50,3 @@ def _startup():
 @app.get("/health")
 def health():
     return {"ok": True}
-
-
-# static web (optional: templates served if present)
-_web_static = Path(__file__).resolve().parent / "web" / "static"
-if _web_static.exists():
-    app.mount("/static", StaticFiles(directory=str(_web_static)),
-              name="static")
-
-
-@app.get("/")
-def index():
-    return {"service": "mobile_superagent",
-            "docs": "/docs",
-            "api": {"devices": "/api/devices", "tasks": "/api/tasks",
-                    "routines": "/api/routines", "profile": "/api/profile"}}

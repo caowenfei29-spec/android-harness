@@ -23,3 +23,7 @@ ui.xml
 # Secrets: local LLM credentials (never push to GitHub)
 .env
 
+
+# mobile_superagent runtime artifacts
+mobile_superagent/storage/
+*.db

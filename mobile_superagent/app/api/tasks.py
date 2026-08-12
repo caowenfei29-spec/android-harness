@@ -1,8 +1,11 @@
 """Task API: create, query, steps, continue, cancel."""
 from fastapi import APIRouter
+from fastapi.responses import FileResponse
+from pathlib import Path
 from pydantic import BaseModel
 
 from .. import db
+from ..settings import settings
 from ..worker.runner import run_task, start_task_background
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -16,6 +19,18 @@ class CreateTaskReq(BaseModel):
 
 class ContinueReq(BaseModel):
     message: str = ""
+
+
+@router.get("/{task_id}/screenshots/{step_no}")
+def get_screenshot(task_id: str, step_no: int):
+    """Serve the PNG for a given step, resolving both naming schemes."""
+    base = Path(settings.storage_dir) / task_id
+    for cand in (f"step{step_no:02d}.png", f"step_{step_no:03d}.png",
+                 f"step_{step_no}.png", f"step{step_no}.png"):
+        p = base / cand
+        if p.exists():
+            return FileResponse(str(p), media_type="image/png")
+    return {"error": "screenshot not found"}
 
 
 @router.post("")

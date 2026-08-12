@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="grid-2">
+  <!-- 左侧：创建任务 -->
+  <section class="card">
+    <div class="card-header">
+      <h2>新建任务</h2>
+    </div>
+
+    <form id="task-form" class="stack">
+      <label class="field">
+        <span>目标设备</span>
+        <select id="device-id" name="device_id" required>
+          <option value="">加载中...</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>技能提示（可选）</span>
+        <select id="skill-hint" name="skill_hint">
+          <option value="">自动路由</option>
+          <option value="APP_INSTALL">安装应用</option>
+          <option value="MESSAGING">消息发送</option>
+          <option value="BROWSER">浏览器</option>
+          <option value="FEED_SUMMARY">信息流摘要</option>
+          <option value="ROUTINES">定时任务管理</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>任务内容</span>
+        <textarea
+          id="goal"
+          name="goal"
+          rows="6"
+          placeholder="例如：安装 YouTube 并验证能打开&#10;例如：用 Via 打开 https://github.com/trending 总结前 5&#10;例如：打开抖音浏览 5 个视频并摘要，不要点赞评论关注"
+          required
+        ></textarea>
+      </label>
+
+      <div class="row">
+        <button type="submit" class="btn primary" id="btn-run">执行任务</button>
+        <button type="button" class="btn ghost" id="btn-refresh-devices">刷新设备</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- 右侧：设备与最近任务 -->
+  <section class="stack">
+    <div class="card">
+      <div class="card-header">
+        <h2>设备状态</h2>
+      </div>
+      <div id="device-summary" class="stack small-gap">
+        <div class="muted">加载中...</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header row-between">
+        <h2>最近任务</h2>
+        <button class="btn small ghost" id="btn-reload-tasks">刷新</button>
+      </div>
+      <div id="task-list" class="list"></div>
+    </div>
+  </section>
+</div>
+
+<div class="card" style="margin-top: 16px;">
+  <div class="card-header">
+    <h2>快捷示例</h2>
+  </div>
+  <div class="chips" id="examples">
+    <button class="chip" data-goal="安装 YouTube 并验证能打开">安装 YouTube</button>
+    <button class="chip" data-goal="用 Via 打开 https://github.com/trending 总结前5个项目">GitHub Trending</button>
+    <button class="chip" data-goal="打开抖音浏览5个视频并摘要，不要点赞、评论或关注">抖音摘要</button>
+    <button class="chip" data-goal="刷新设备列表并截图当前屏幕">当前屏幕</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    HomePage.init();
+  });
+</script>
+{% endblock %}

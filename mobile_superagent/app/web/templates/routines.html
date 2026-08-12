@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="grid-2">
+  <section class="card">
+    <div class="card-header">
+      <h2>新建定时任务</h2>
+    </div>
+    <form id="routine-form" class="stack">
+      <label class="field">
+        <span>标题</span>
+        <input id="r-title" required placeholder="例如：每日 GitHub 早报" />
+      </label>
+
+      <label class="field">
+        <span>设备</span>
+        <select id="r-device-id" required></select>
+      </label>
+
+      <label class="field">
+        <span>执行内容</span>
+        <textarea id="r-prompt" rows="5" required placeholder="到点后要执行的自然语言任务"></textarea>
+      </label>
+
+      <div class="grid-2-inner">
+        <label class="field">
+          <span>小时 (0-23)</span>
+          <input id="r-hour" type="number" min="0" max="23" value="9" required />
+        </label>
+        <label class="field">
+          <span>分钟 (0-59)</span>
+          <input id="r-minute" type="number" min="0" max="59" value="0" required />
+        </label>
+      </div>
+
+      <label class="field">
+        <span>频率</span>
+        <select id="r-freq">
+          <option value="DAILY">每天</option>
+          <option value="WEEKLY">每个工作日</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>时区</span>
+        <input id="r-timezone" value="Asia/Shanghai" required />
+      </label>
+
+      <button class="btn primary" type="submit">创建</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="card-header row-between">
+      <h2>已有定时任务</h2>
+      <button class="btn small ghost" id="btn-reload-routines">刷新</button>
+    </div>
+    <div id="routine-list" class="list"></div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    RoutinesPage.init();
+  });
+</script>
+{% endblock %}

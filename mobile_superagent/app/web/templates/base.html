@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }} · Mobile Superagent</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">MS</div>
+        <div>
+          <div class="brand-title">Mobile Superagent</div>
+          <div class="brand-sub">真机 Agent 控制台</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <a class="nav-item {% if active == 'home' %}active{% endif %}" href="/">控制台</a>
+        <a class="nav-item {% if active == 'devices' %}active{% endif %}" href="/devices">设备</a>
+        <a class="nav-item {% if active == 'routines' %}active{% endif %}" href="/routines">定时任务</a>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="muted">本地真机模式</div>
+        <div class="muted">不含云手机</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 class="page-title">{{ title }}</h1>
+          <p class="page-desc" id="page-desc">用自然语言向 Android 真机下发任务</p>
+        </div>
+        <div class="topbar-actions">
+          <span id="global-status" class="pill">就绪</span>
+        </div>
+      </header>
+
+      <section class="content">
+        {% block content %}{% endblock %}
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/js/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

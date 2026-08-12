@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row-between" style="margin-bottom: 12px;">
+  <div>
+    <div class="muted">Task ID</div>
+    <code id="task-id">{{ task_id }}</code>
+  </div>
+  <div class="row">
+    <a class="btn ghost" href="/">返回控制台</a>
+    <button class="btn danger ghost" id="btn-cancel">取消任务</button>
+  </div>
+</div>
+
+<div class="grid-2">
+  <!-- 左：状态与结果 -->
+  <section class="stack">
+    <div class="card">
+      <div class="card-header row-between">
+        <h2>任务状态</h2>
+        <span id="task-status" class="pill">loading</span>
+      </div>
+      <div class="stack small-gap">
+        <div>
+          <div class="label">目标</div>
+          <div id="task-goal" class="text-block">-</div>
+        </div>
+        <div>
+          <div class="label">当前步骤</div>
+          <div id="task-step">0</div>
+        </div>
+        <div id="need-user-box" class="alert hidden">
+          <div class="alert-title">需要你接管</div>
+          <div id="need-user-reason" class="mb-8"></div>
+          <div id="need-user-instruction" class="mb-8"></div>
+          <label class="field">
+            <span>补充说明（可选）</span>
+            <input id="continue-message" placeholder="例如：验证码已输入" />
+          </label>
+          <button class="btn primary" id="btn-continue">我已完成，继续</button>
+        </div>
+        <div>
+          <div class="label">最终结果</div>
+          <pre id="task-result" class="code-block">-</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header row-between">
+        <h2>步骤时间线</h2>
+        <button class="btn small ghost" id="btn-reload-steps">刷新</button>
+      </div>
+      <div id="step-list" class="timeline"></div>
+    </div>
+  </section>
+
+  <!-- 右：截图 -->
+  <section class="card">
+    <div class="card-header row-between">
+      <h2>最新屏幕</h2>
+      <span id="shot-meta" class="muted">-</span>
+    </div>
+    <div class="screenshot-wrap">
+      <img id="screenshot" class="screenshot" alt="task screenshot" />
+      <div id="screenshot-empty" class="empty">暂无截图</div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    TaskPage.init("{{ task_id }}");
+  });
+</script>
+{% endblock %}
