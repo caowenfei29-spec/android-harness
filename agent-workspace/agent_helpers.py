@@ -1,9 +1,9 @@
 """
 Agent-editable android helpers.
 
-Add task-specific primitives here. Core helpers from android_harness.helpers
-load this file at import time; anything defined here is available in
-android-harness scripts alongside the core helpers.
+Add trusted task-specific primitives here. This file is loaded only by the
+explicit ``android-harness --unsafe-script`` compatibility mode; the JSON
+planner, policy engine, and safe executor never import it.
 
 ColorOS / OPPO R17 notes:
 - ADBKeyboard is installed and *enabled*, but ColorOS blocks `adb shell ime set`

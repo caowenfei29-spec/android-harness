@@ -1,8 +1,7 @@
-"""Pre-imported helpers for android-harness scripts.
+"""Android interaction helpers used by the executor and unsafe script mode.
 
-The CLI injects every public name here into the exec namespace, so a script
-can call tap_text(), dump_nodes(), open_app(), etc. directly. Agent-editable
-helpers live in AGENT_WORKSPACE/agent_helpers.py and are merged on top.
+Agent-editable Python is never loaded by the safe executor.  Legacy script
+mode may explicitly opt in through ``enable_unsafe_agent_helpers``.
 
 Eyes = uiautomator node tree (real DOM). Hands = adb input.
 """
@@ -307,7 +306,8 @@ def wait_stable(timeout=6.0, interval=0.5, settle=2):
     return False
 
 
-def _load_agent_helpers():
+def enable_unsafe_agent_helpers():
+    """Load local Python extensions for explicit unsafe-script mode only."""
     p = AGENT_WORKSPACE / "agent_helpers.py"
     if not p.exists():
         return
@@ -319,9 +319,6 @@ def _load_agent_helpers():
     for name, value in vars(module).items():
         if not name.startswith("_"):
             globals()[name] = value
-
-
-_load_agent_helpers()
 
 # Task-level helpers are imported last to avoid a circular import:
 # task.py depends on helpers, so helpers must be fully defined first.

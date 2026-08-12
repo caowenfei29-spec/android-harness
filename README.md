@@ -33,15 +33,14 @@ The agent drives the phone through ADB:
 # 2) run the doctor
 ./android-harness --doctor
 
-# 3) drive it
-./android-harness <<'PY'
-home()
-open_app("微信")
-tap_text("文件传输助手")
-type_text("hello from the harness")
-print([n["text"] for n in dump_nodes()][:10])
-PY
+# 3) produce auditable JSON, then execute it
+./android-harness plan "Open 微信" > plan.json
+./android-harness execute plan.json
 ```
+
+The default CLI never executes generated Python. For a risky plan, review the
+JSON and use `android-harness execute plan.json --confirm`; each risky step is
+shown and bound to a one-plan confirmation token before ADB is called.
 
 ## Install
 
@@ -65,11 +64,25 @@ hatchling. See [PUBLISH.md](PUBLISH.md) for the release flow.
 
 ## Safety & trust
 
-This harness drives a **real phone** and can run arbitrary `adb` commands. It
-follows a strict consent model: stop and ask before anything outward-facing or
-hard to reverse (send, post, buy, delete, change settings, install). Read
+This harness drives a **real phone**. Its default execution chain is:
+
+```
+LLM → JSON Task Plan → Policy Engine → Human Confirmation → Executor → ADB
+```
+
+The executor accepts only validated JSON capabilities and never Python source.
+Risk comes from the capability type, not labels such as `发送` or `Delete`.
+Generic taps and input fail closed and require confirmation; destructive and
+settings capabilities receive the stricter `DESTRUCTIVE` classification. Read
 [SECURITY.md](SECURITY.md) for the threat model and the current attack-surface
 table before wiring it into an agent.
+
+Unrestricted Python remains available only as an explicit compatibility escape
+hatch for trusted local scripts:
+
+```bash
+android-harness --unsafe-script trusted-script.py
+```
 
 ## Why Android is the better target here
 
@@ -83,15 +96,18 @@ so `tap_text("设置")` is exact, not approximate. The hands are the same idea
 
 - `SKILL.md` — day-to-day usage (the agent-facing product surface)
 - `install.md` — connection bootstrap and troubleshooting
-- `src/android_harness/` — core (~500 lines):
+- `src/android_harness/` — core package:
   - `adb.py` — adb wrapper, input primitives, UI dump, connection state
   - `ui.py` — parse the uiautomator XML into tappable node dicts
-  - `helpers.py` — the primitives pre-imported into scripts
-  - `task.py` — task-layer: step builders + `run_task` (stops at `ask`)
+  - `helpers.py` — low-level trusted primitives used by the executor and unsafe scripts
+  - `plan.py` — strict JSON schema, parser, canonical digest
+  - `policy.py` — validation, risk classification, confirmation authorization
+  - `executor.py` — JSON-only ADB execution; no safety decisions
+  - `task.py` — compatibility builders backed by policy + executor
   - `admin.py` — `--doctor`
-  - `run.py` — the CLI (`exec` stdin, `task` subcommand, with helpers in scope)
-- `agent-workspace/agent_helpers.py` — helper code the agent edits; auto-loaded
-  into every script's namespace
+  - `run.py` — `plan`, `execute`, and explicit `--unsafe-script` modes
+- `agent-workspace/agent_helpers.py` — optional trusted code loaded only by
+  explicit unsafe script mode
 
 ## Limits
 
@@ -102,7 +118,7 @@ so `tap_text("设置")` is exact, not approximate. The hands are the same idea
 
 ## Safety
 
-This is a real phone. The harness follows the consent model from
-phone-harness-safe: stop and ask before anything outward-facing or hard to
-reverse (send, post, buy, delete, change settings, install). Connecting the
-phone is always the user's physical action — the harness never auto-connects.
+This is a real phone. No confirmation token means no risky execution. An `ask`
+step supplies a human prompt but is not itself authorization; policy must
+receive approval and mint a token bound to the exact plan and step. Connecting
+the phone is always the user's physical action.

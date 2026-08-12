@@ -118,7 +118,7 @@
         <span id="nl-status" class="hint"></span>
       </div>
       <pre id="nl-log" class="log"></pre>
-      <div class="hint">指令经本地 LLM 翻译成 harness 调用执行。任何发送/购买/删除等外向动作会被拦截，需你确认。需在 .env 配置 LLM key。</div>
+      <div class="hint">LLM 只生成 JSON Task Plan。Policy Engine 独立分类风险，确认后 Executor 才会调用 ADB。</div>
     </div>
 
     <div class="card">
@@ -132,13 +132,14 @@
       <div class="hint">把若干屏文字交给本地 LLM 归纳成要点。适合「刷N个视频后总结」。</div>
     </div>
 
-    <div class="card">
-      <h2>脚本控制台 (Python)</h2>
+    <div class="card" id="unsafe-console" hidden>
+      <h2>⚠ 不安全脚本控制台 (Python)</h2>
       <textarea id="i-code" placeholder="home()&#10;tap_text('设置')&#10;print([n['text'] for n in dump_nodes()][:10]"></textarea>
       <div class="row" style="margin-top:8px">
         <button class="go" id="t-run">运行</button>
       </div>
       <pre id="log"></pre>
+      <div class="hint" style="color:var(--warn)">此功能执行不受限制的主机 Python，仅在服务以 --unsafe 启动时显示。</div>
     </div>
   </div>
 </div>
@@ -162,8 +163,18 @@ function log(msg, cls) {
 }
 async function act(op, body) {
   const data = Object.assign({op}, body);
-  const res = await api('/action', {method:'POST',
+  let res = await api('/action', {method:'POST',
     headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  if (res.confirmation_required) {
+    const detail = JSON.stringify(res.plan, null, 2);
+    if (!confirm('风险操作需要人工确认：\n\n' + res.error + '\n\n' + detail)) {
+      log('✗ 用户拒绝确认', 'err'); return res;
+    }
+    res = await api('/action', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+        op:'confirm', challenge:res.challenge, plan_digest:res.plan_digest
+      })});
+  }
   if (res.ok) { log('✓ ' + op + (res.output ? '' : ''), 'ok'); if (res.output) log(res.output); }
   else { log('✗ ' + (res.error||'failed'), 'err'); }
   if (op !== 'home' && op !== 'back') setTimeout(refresh, 400);
@@ -176,6 +187,7 @@ async function refresh() {
   $('#s-app').textContent = st.package || '—';
   $('#s-size').textContent = st.size ? st.size.join('×') : '—';
   $('#s-kbd').textContent = st.adbkeyboard ? '已装' : '未装';
+  $('#unsafe-console').hidden = !st.unsafe_script;
   if (st.state !== 'ready') {
     $('#s-conn').style.color = 'var(--err)';
     $('#screen').style.opacity = .3;
@@ -288,20 +300,31 @@ $('#t-nl').onclick = async () => {
   if (!prompt) return;
   nlLog('▶ ' + prompt);
   $('#nl-status').textContent = '翻译并执行中…';
-  const res = await api('/action', {method:'POST',
+  const request = {op:'natural', prompt};
+  let res = await api('/action', {method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({op:'natural', prompt})});
+    body: JSON.stringify(request)});
+  if (res.confirmation_required) {
+    nlLog('JSON Task Plan:\n' + JSON.stringify(res.plan, null, 2), 'warn');
+    if (!confirm('Policy Engine 要求确认此计划中的风险步骤。\n\n' +
+                 res.error + '\n\n' + JSON.stringify(res.plan, null, 2))) {
+      nlLog('✗ 用户拒绝确认', 'err'); $('#nl-status').textContent = '已拒绝'; return;
+    }
+    res = await api('/action', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({
+        op:'confirm', challenge:res.challenge, plan_digest:res.plan_digest
+      })});
+  }
   if (res.blocked) {
     nlLog('✗ 已拦截: ' + res.error, 'err');
-    nlLog('翻译出的代码:\n' + res.code, 'err');
+    if (res.plan) nlLog('JSON Task Plan:\n' + JSON.stringify(res.plan, null, 2), 'err');
     $('#nl-status').textContent = '被安全规则拦截';
     return;
   }
   if (!res.ok) { nlLog('✗ ' + (res.error||'失败'), 'err');
     $('#nl-status').textContent = '失败'; return; }
-  nlLog('翻译代码:\n' + res.code, 'ok');
+  nlLog('执行计划:\n' + JSON.stringify(res.plan, null, 2), 'ok');
   if (res.output) nlLog(res.output, 'ok');
-  if (res.needs_confirm) nlLog('⚠ 含 step_ask：执行到该步会停下等你确认', 'warn');
   $('#nl-status').textContent = '完成';
   setTimeout(refresh, 500);
 };

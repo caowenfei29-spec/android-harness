@@ -68,8 +68,9 @@ ADBKeyboard** (one-time). After that, `type_unicode("中文")` works in scripts.
 ## Visual control page (local)
 
 A browser-based remote control UI is included — live screenshot, click-to-tap,
-tap-by-label, type (ASCII / Chinese), home/back, open app, and a Python script
-console. The server binds to **127.0.0.1 only** (not exposed to the network).
+tap-by-label, type (ASCII / Chinese), home/back, open app, and JSON-planned LLM
+control. The server refuses every non-loopback bind address. The unrestricted
+Python console is disabled by default.
 
 ```bash
 # run it (any of these)
@@ -83,7 +84,12 @@ Features in the page:
 - Click anywhere on the mirrored screen to tap that coordinate.
 - Toggle "显示控件" to overlay tappable UI boxes (from the real view tree).
 - "按文字点击" chips: tap a labeled control by name.
-- Script console: run real `android_harness.helpers` Python against the phone.
+- Risky actions display their exact JSON plan and require a server-issued,
+  one-time confirmation challenge bound to that plan digest. Confirmation never
+  regenerates the plan or calls the LLM a second time.
+
+For trusted local development only, `python web.py --unsafe` enables the Python
+console with a prominent warning. It still cannot bind outside localhost.
 
 ## --doctor ladder
 
