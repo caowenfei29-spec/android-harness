@@ -16,6 +16,26 @@
 
 <div class="card" style="margin-top: 16px;">
   <div class="card-header">
+    <h2>Wi-Fi 设备连接</h2>
+  </div>
+  <div class="grid-2" style="align-items: end;">
+    <label class="field">
+      <span>设备 IP 地址</span>
+      <input id="wifi-ip" type="text" placeholder="192.168.1.100" />
+    </label>
+    <label class="field">
+      <span>端口</span>
+      <input id="wifi-port" type="number" value="5555" />
+    </label>
+    <div class="row" style="align-items: end;">
+      <button class="btn primary" id="btn-wifi-connect">连接</button>
+    </div>
+  </div>
+  <div id="wifi-result" class="muted" style="margin-top: 8px;"></div>
+</div>
+
+<div class="card" style="margin-top: 16px;">
+  <div class="card-header">
     <h2>实时预览</h2>
   </div>
   <div class="grid-2">

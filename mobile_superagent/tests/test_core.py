@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core import router, schema, safety  # noqa: E402
 from app.core import agent_loop  # noqa: E402
+from app.core import verifier  # noqa: E402
 
 
 def test_extract_json_plain():
@@ -121,3 +122,47 @@ def test_agent_ocr_gated_by_skill():
 def test_app_aliases_cover_core_apps():
     assert agent_loop.APP_ALIASES["抖音"] == "com.ss.android.ugc.aweme"
     assert agent_loop.APP_ALIASES["微信"] == "com.tencent.mm"
+
+
+# --- P1: send-rate throttle, messaging verifier, paste in whitelist --------
+
+def test_schema_has_paste_action():
+    assert "paste" in schema.ACTION_TYPES
+    assert "set_clipboard" in schema.ACTION_TYPES
+
+
+def test_send_rate_throttles_fast_repeat():
+    g = safety.SafetyGuard(send_min_interval=3.0)
+    # first send tap on a messaging page passes
+    assert g.check("发消息", {"type": "tap", "x": 1, "y": 2},
+                   page_text="发送") is None
+    # immediate second send tap is blocked
+    block = g.check("发消息", {"type": "tap", "x": 1, "y": 2},
+                    page_text="发送")
+    assert block is not None and "重复发送" in block
+
+
+def test_verifier_confirms_sent_text_echo():
+    v = verifier.MessagingVerifier()
+    ok, note = v.verify_send("聊天记录: 你好呀\n刚才那条", "你好呀")
+    assert ok
+    assert "确认已发送" in note
+
+
+def test_verifier_rejects_no_echo():
+    v = verifier.MessagingVerifier()
+    ok, _ = v.verify_send("聊天记录: 完全不同内容", "你好呀")
+    assert not ok
+
+
+def test_verifier_make_for_messaging_only():
+    assert verifier.make_verifier("MESSAGING") is not None
+    assert verifier.make_verifier("APP_INSTALL") is None
+
+
+def test_target_package_extract():
+    loop = agent_loop.AgentLoop.__new__(agent_loop.AgentLoop)
+    loop.goal = "打开微信发消息"
+    assert loop._target_package() == "com.tencent.mm"
+    loop.goal = "随便"
+    assert loop._target_package() is None

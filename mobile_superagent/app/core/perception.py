@@ -27,6 +27,9 @@ class CaptureState:
     screenshot_path: str = ""
     screen_ocr: str = ""
     size: tuple | None = None
+    locked: bool = False
+    ime: str = ""
+    target_installed: bool | None = None
 
 
 def _tesseract_cmd() -> str:
@@ -56,15 +59,16 @@ def _ocr_image(path: str) -> str:
         return ""
 
 
-def capture_state(bridge, run_dir, step: int, ocr: bool = True) -> CaptureState:
+def capture_state(bridge, run_dir, step: int, ocr: bool = True,
+                  target_package: str | None = None) -> CaptureState:
     """Capture current device state via the given bridge (the ADB adapter).
 
     bridge must expose: current_app(), screen_size(), dump_nodes(),
-    screenshot(path) -> path.
+    screenshot(path) -> path. Optional: is_installed(), is_locked(),
+    current_ime() for the heuristics below.
 
-    `ocr` gates the expensive screenshot OCR pass — turn it OFF for skills that
-    don't need on-screen text (e.g. APP_INSTALL), ON for FEED_SUMMARY where the
-    rendered video title only exists in pixels.
+    `ocr` gates the expensive screenshot OCR pass. `target_package` (if given)
+    is checked for installation so the model knows whether it must install it.
     """
     st = CaptureState()
     try:
@@ -73,6 +77,20 @@ def capture_state(bridge, run_dir, step: int, ocr: bool = True) -> CaptureState:
         st.activity = act or ""
     except Exception:  # noqa: BLE001
         pass
+    # lock screen / IME heuristics (cheap dumpsys; best-effort)
+    try:
+        st.locked = bridge.is_locked() if hasattr(bridge, "is_locked") else False
+    except Exception:  # noqa: BLE001
+        st.locked = False
+    try:
+        st.ime = bridge.current_ime() if hasattr(bridge, "current_ime") else ""
+    except Exception:  # noqa: BLE001
+        st.ime = ""
+    if target_package and hasattr(bridge, "is_installed"):
+        try:
+            st.target_installed = bridge.is_installed(target_package)
+        except Exception:  # noqa: BLE001
+            st.target_installed = None
     try:
         st.size = bridge.screen_size()
     except Exception:  # noqa: BLE001
@@ -111,6 +129,12 @@ def state_to_prompt(st: CaptureState) -> str:
         "当前activity：%s" % (st.activity or "unknown"),
         "屏幕尺寸：%s" % (list(st.size) if st.size else "unknown"),
     ]
+    if st.locked:
+        lines.append("⚠️ 设备处于锁屏状态，需先唤醒/解锁")
+    if st.ime and "adbkeyboard" in st.ime.lower():
+        lines.append("输入法：ADBKeyboard（支持中文输入 type_unicode）")
+    if st.target_installed is not None:
+        lines.append("目标App是否已安装：%s" % ("是" if st.target_installed else "否"))
     if st.screen_ocr:
         # OCR text is the "visual summary" — for video feeds this is the
         # actual on-screen title/subtitle.

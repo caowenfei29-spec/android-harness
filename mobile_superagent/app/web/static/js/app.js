@@ -442,8 +442,26 @@ const DevicesPage = {
     document.getElementById("btn-scan").addEventListener("click", () => this.scan());
     document.getElementById("btn-reload-devices-page").addEventListener("click", () => this.load());
     document.getElementById("btn-preview").addEventListener("click", () => this.preview());
+    const wifiBtn = document.getElementById("btn-wifi-connect");
+    if (wifiBtn) {
+      wifiBtn.addEventListener("click", () => this.connectWifi());
+    }
 
     await this.load();
+  },
+
+  async connectWifi() {
+    const host = document.getElementById("wifi-ip").value.trim();
+    const port = parseInt(document.getElementById("wifi-port").value, 10) || 5555;
+    const out = document.getElementById("wifi-result");
+    if (!host) { out.textContent = "请输入设备 IP"; return; }
+    try {
+      const res = await API.post("/api/devices/connect_wifi", { host, port });
+      out.textContent = res.ok ? ("已连接：" + (res.output || "ok")) : ("失败：" + (res.error || ""));
+      await this.load();
+    } catch (e) {
+      out.textContent = "失败：" + (e.message || "");
+    }
   },
 
   async scan() {

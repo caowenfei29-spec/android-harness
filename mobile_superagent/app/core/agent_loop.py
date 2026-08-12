@@ -26,6 +26,7 @@ from .router import route_skill
 from .progress import ProgressTracker
 from .safety import SafetyGuard
 from .perception import capture_state, state_to_prompt
+from .verifier import make_verifier
 from .. import db
 
 # Skills whose only useful signal is on-screen rendered text (video feeds,
@@ -96,14 +97,30 @@ class AgentLoop:
         # text (video titles). APP_INSTALL etc. save the OCR cost per step.
         self.ocr = self.skill in _OCR_SKILLS
         self.profile = db.get_profile() or {}
+        self.verifier = make_verifier(self.skill)
+        self.last_action_text = ""  # text of the last input/send action
+        # Structured history (JSON-able) for audit/replay; prompt uses the
+        # flattened strings in `history`.
+        self.steps: list[dict] = []
 
     def _emit(self, event: dict):
         if self.on_step:
             self.on_step(event)
 
+    def _target_package(self) -> str | None:
+        """Best-effort: extract a target package from the goal via the alias
+        table, so the state can report whether the app is installed."""
+        g = self.goal
+        for alias, pkg in APP_ALIASES.items():
+            if alias and alias in g:
+                return pkg
+        return None
+
     def run(self) -> dict[str, Any]:
         device = self.dm.ensure_online(self.serial)
-        state = capture_state(device, self.run_dir, step=0, ocr=self.ocr)
+        target_pkg = self._target_package()
+        state = capture_state(device, self.run_dir, step=0, ocr=self.ocr,
+                              target_package=target_pkg)
 
         if self.resume_message:
             self.history.append(f"user_resume: {self.resume_message}")
@@ -175,6 +192,10 @@ class AgentLoop:
             # execute
             exec_result = device.execute(action)
 
+            # remember text for send-verification on messaging
+            if action.get("type") in ("input_text", "set_clipboard"):
+                self.last_action_text = str(action.get("text", ""))
+
             # record fingerprint (real action type)
             self.progress.add(
                 package=state.foreground_package,
@@ -182,6 +203,44 @@ class AgentLoop:
                 screenshot_path=state.screenshot_path,
                 action_type=action.get("type", "unknown"),
             )
+
+            # messaging send-verifier: after a send tap on a messaging page,
+            # re-capture the screen and confirm the typed text reappears as
+            # evidence (completion must be verified, not assumed).
+            is_send_tap = (
+                self.verifier and action.get("type") == "tap"
+                and self.last_action_text
+                and any(m in (state.screen_ocr or state.ui_dump)
+                        for m in ("发送", "send"))
+            )
+            if is_send_tap:
+                try:
+                    device.wait_stable(timeout=3.0)
+                except Exception:  # noqa: BLE001
+                    time.sleep(0.6)
+                post = capture_state(device, self.run_dir, step=step,
+                                     ocr=self.ocr, target_package=target_pkg)
+                ok, note = self.verifier.verify_send(
+                    post.screen_ocr or post.ui_dump, self.last_action_text)
+                if ok:
+                    event = {
+                        "type": "step", "step": step,
+                        "observe": agent_out.observe,
+                        "review": agent_out.review,
+                        "plan": agent_out.plan,
+                        "skill": agent_out.skill or self.skill,
+                        "status": "done",
+                        "action": action,
+                        "exec_result": exec_result.__dict__(),
+                        "screenshot_path": post.screenshot_path,
+                        "foreground_package": post.foreground_package,
+                        "verified": note,
+                    }
+                    self._emit(event)
+                    return {"status": "done", "message": note}
+                # not confirmed — tell the model so it can retry/adapt
+                self.history.append(
+                    f"{step}. send-verify: {note}（发送证据未确认，勿重复点发送）")
 
             event = {
                 "type": "step", "step": step,
@@ -194,6 +253,19 @@ class AgentLoop:
                 "user_message": agent_out.user_message,
             }
             self._emit(event)
+            # structured history (audit/replay), JSON-able
+            self.steps.append({
+                "step": step,
+                "observe": agent_out.observe,
+                "review": agent_out.review,
+                "plan": agent_out.plan,
+                "skill": agent_out.skill or self.skill,
+                "action": action,
+                "action_type": action.get("type"),
+                "result": exec_result.message,
+                "package": state.foreground_package,
+                "screenshot": state.screenshot_path,
+            })
             self.history.append(
                 f"{step}. {json_dumps(action)} => {exec_result.message}")
 
@@ -225,7 +297,7 @@ class AgentLoop:
             else:
                 time.sleep(0.5)
             state = capture_state(device, self.run_dir, step=step,
-                                  ocr=self.ocr)
+                                  ocr=self.ocr, target_package=target_pkg)
 
         return {"status": "failed",
                 "message": f"超过最大步数 {self.max_steps}"}

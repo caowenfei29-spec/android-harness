@@ -70,6 +70,42 @@ class AndroidDevice:
         self._pin()
         return H.wait_stable(timeout=timeout, interval=interval, settle=settle)
 
+    def is_installed(self, package: str) -> bool:
+        """Whether the target package is installed on the device."""
+        self._pin()
+        try:
+            out = ADB.run("shell", "pm", "list", "packages", package,
+                          timeout=15, check=False).stdout
+            return f"package:{package}" in out
+        except Exception:  # noqa: BLE001
+            return False
+
+    def is_locked(self) -> bool:
+        """Heuristic: is the device on the lock screen / keyguard?"""
+        self._pin()
+        try:
+            out = ADB.run("shell", "dumpsys", "window", "policy",
+                          timeout=10, check=False).stdout
+            return "mShowingLockscreen=true" in out \
+                or "isStatusBarKeyguard=true" in out \
+                or "mKeyguardShowing=true" in out
+        except Exception:  # noqa: BLE001
+            return False
+
+    def current_ime(self) -> str:
+        self._pin()
+        return ADB._current_ime() or ""
+
+    def clipboard(self) -> str:
+        """Read clipboard text (best-effort; unreliable across ROMs)."""
+        self._pin()
+        try:
+            out = ADB.run("shell", "cmd", "clipboard", "get-text",
+                          timeout=10, check=False).stdout
+            return out.strip()
+        except Exception:  # noqa: BLE001
+            return ""
+
     def _pin(self):
         """Re-assert the device serial in case a different thread re-targeted
         the shared context in the meantime. Cheap; keeps us isolated."""
@@ -89,6 +125,7 @@ class AndroidDevice:
                 "swipe": lambda: self._swipe(action),
                 "input_text": lambda: self._input_text(action),
                 "set_clipboard": lambda: self._set_clipboard(action),
+                "paste": lambda: self._paste(action),
                 "back": lambda: self._back(),
                 "home": lambda: self._home(),
                 "wait": lambda: self._wait(action),
@@ -161,17 +198,42 @@ class AndroidDevice:
         time.sleep(0.2)
 
     def _set_clipboard(self, action):
-        """Put text on the clipboard (works on most devices via a shell cmd
-        fallback since `cmd clipboard` is unreliable)."""
+        """Put text on the clipboard. Prefers the ADBKeyboard broadcast (works
+        on ColorOS where `cmd clipboard set-text` returns nothing), falls back
+        to `cmd clipboard set-text`."""
         text = str(action.get("text", ""))
-        # Many devices support: am broadcast -a ADB_INPUT_TEXT ... no. Use the
-        # service API where available; else fall back to `cmd clipboard`.
+        try:
+            safe = text.replace("'", "'\\''")
+            ADB.run("shell",
+                    f"am broadcast -a ADB_SET_CLIPBOARD --es msg '{safe}'",
+                    timeout=10, check=False)
+        except Exception:  # noqa: BLE001
+            pass
         try:
             ADB.run("shell", f"cmd clipboard set-text '{text}'",
                     timeout=10, check=False)
         except Exception:  # noqa: BLE001
             pass
         return ExecResult(True, "clipboard set")
+
+    def _paste(self, action):
+        """Long-press the field at (x,y) to bring up the paste menu, then tap
+        the paste option — the paste-first flow for messaging."""
+        x, y = int(action["x"]), int(action["y"])
+        ADB.long_press(x, y, 0.8)
+        time.sleep(0.6)
+        # Try to find and tap the "paste" menu item in the UI tree.
+        try:
+            path = ADB.dump_ui()
+            nodes = H._ui.parse(path)
+            for n in nodes:
+                label = (n.get("text") or n.get("desc") or "").strip()
+                if label in ("粘贴", "Paste"):
+                    ADB.tap(n["x"], n["y"])
+                    return ExecResult(True, "pasted")
+        except Exception:  # noqa: BLE001
+            pass
+        return ExecResult(False, "paste menu not found")
 
     def _back(self):
         ADB.back()
@@ -204,7 +266,6 @@ class AndroidDevice:
         return ExecResult(True, "uninstalled")
 
     def _clipboard(self):
-        out = ADB.run("shell", "clipboard", timeout=10, check=False).stdout
         r = ExecResult(True, "clipboard")
-        r.data = {"text": out.strip()}
+        r.data = {"text": self.clipboard()}
         return r

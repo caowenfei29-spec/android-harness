@@ -13,9 +13,9 @@ from typing import Any
 # The whitelist of action types the executor understands.
 ACTION_TYPES = {
     "get_state", "launch_app", "tap", "long_press", "swipe", "input_text",
-    "set_clipboard", "back", "home", "wait", "open_url", "play_store_search",
-    "uninstall_app", "get_clipboard", "request_user_takeover",
-    "respond_to_user",
+    "set_clipboard", "paste", "back", "home", "wait", "open_url",
+    "play_store_search", "uninstall_app", "get_clipboard",
+    "request_user_takeover", "respond_to_user",
 }
 
 TERMINAL_ACTIONS = {"request_user_takeover", "respond_to_user"}
