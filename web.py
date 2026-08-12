@@ -29,12 +29,15 @@ from android_harness import helpers as H  # noqa: E402
 from android_harness import adb as A      # noqa: E402
 from android_harness import ui as UI       # noqa: E402
 try:
-    from llm import translate, summarize, plan, configured as llm_configured
+    from llm import translate, summarize, plan, decide, \
+        configured as llm_configured
 except Exception:  # noqa: BLE001
     translate = summarize = None
     def llm_configured():
         return False
     def plan(*a, **k):
+        raise RuntimeError("LLM 模块加载失败")
+    def decide(*a, **k):
         raise RuntimeError("LLM 模块加载失败")
 
 
@@ -225,10 +228,208 @@ def _public_task(t):
         "plan_text": t.get("plan_text"), "status": t.get("status"),
         "result": t.get("result"), "steps": steps,
         "created": t.get("created"),
+        "history": t.get("history"),
     }
 
 
+# ===========================================================================
+# Protocol mode — one atomic action per round, reactive loop
+# ===========================================================================
+# The control UI drives this loop: build a screen snapshot -> ask the LLM for
+# ONE whitelisted action -> execute it -> return fresh state. The loop repeats
+# until status is done/failed/need_user.
+
+def _agent_snapshot(goal, history):
+    """Build the current screen snapshot + goal + history for the LLM."""
+    st = _state()
+    pkg, act = A.current_app()
+    kb = A.adbkeyboard_installed()
+    nodes = []
+    try:
+        nodes = H.dump_nodes()
+    except Exception:  # noqa: BLE001
+        nodes = []
+    key_nodes = []
+    for n in nodes:
+        if not n.get("text") and not n.get("desc") and not n.get("clickable"):
+            continue
+        key_nodes.append({
+            "text": (n.get("text") or "")[:40],
+            "desc": (n.get("desc") or "")[:40],
+            "clickable": bool(n.get("clickable")),
+            "x": n.get("x"), "y": n.get("y"),
+        })
+    key_nodes = key_nodes[:60]
+    return "\n".join([
+        "用户目标：%s" % goal,
+        "前台包名：%s" % (pkg or "unknown"),
+        "当前activity：%s" % (act or "unknown"),
+        "ADBKeyboard可用：%s" % kb,
+        "屏幕尺寸：%s" % (list(st.get("size") or ()) or "unknown"),
+        "",
+        "UI dump（关键节点，点击目标用中心坐标 x/y）：",
+        json.dumps(key_nodes, ensure_ascii=False),
+        "",
+        "最近历史动作：",
+        (json.dumps(history, ensure_ascii=False) if history else "(空)"),
+    ])
+
+
+def _exec_protocol_action(action):
+    """Execute ONE protocol action. Returns {ok, message}."""
+    at = action.get("type")
+    if at == "get_state":
+        return {"ok": True, "message": "state_snapshot"}
+    if at == "launch_app":
+        _require_ready()
+        A.launch(str(action.get("package_name", "")))
+        return {"ok": True, "message": "launched %s" % action.get("package_name")}
+    if at == "tap":
+        _require_ready()
+        A.tap(int(action["x"]), int(action["y"]))
+        return {"ok": True, "message": "tapped (%s,%s)" % (action["x"], action["y"])}
+    if at == "long_press":
+        _require_ready()
+        A.long_press(int(action["x"]), int(action["y"]),
+                     float(action.get("duration_ms", 800)) / 1000.0)
+        return {"ok": True, "message": "long-pressed (%s,%s)" % (action["x"], action["y"])}
+    if at == "swipe":
+        _require_ready()
+        A.swipe(int(action["x1"]), int(action["y1"]),
+                int(action["x2"]), int(action["y2"]),
+                float(action.get("duration_ms", 400)) / 1000.0)
+        return {"ok": True, "message": "swiped"}
+    if at == "input_text":
+        _require_ready()
+        text = str(action.get("text", ""))
+        if not text:
+            return {"ok": False, "message": "input_text 的 text 不能为空"}
+        A.tap(int(action["x"]), int(action["y"]))
+        try:
+            H.type_unicode(text)
+        except Exception:  # noqa: BLE001
+            A.type_text(text)
+        return {"ok": True, "message": "typed into (%s,%s)" % (action["x"], action["y"])}
+    if at == "back":
+        _require_ready(); A.back()
+        return {"ok": True, "message": "back"}
+    if at == "home":
+        _require_ready(); A.home()
+        return {"ok": True, "message": "home"}
+    if at == "wait":
+        time.sleep(float(action.get("seconds", 3)))
+        return {"ok": True, "message": "waited %ss" % action.get("seconds")}
+    if at == "open_url":
+        _require_ready()
+        A.run("shell", "am", "start", "-a", "android.intent.action.VIEW",
+              "-d", str(action.get("url", "")), timeout=15)
+        return {"ok": True, "message": "opened url"}
+    if at in ("play_store_search", "uninstall_app", "get_clipboard",
+              "request_user_takeover", "respond_to_user"):
+        return {"ok": True, "message": "handled at loop level"}
+    return {"ok": False, "message": "未知协议动作 %r" % at}
+
+
+def _agent_round(goal, history):
+    """Run ONE protocol round. Returns a dict for the frontend."""
+    snapshot = _agent_snapshot(goal, history)
+    try:
+        d = decide(snapshot)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "协议决策失败: %s" % e}
+    action = d.get("action") or {}
+    status = d.get("status", "running")
+    message = d.get("user_message", "")
+    if action.get("type") == "respond_to_user":
+        return {"ok": True, "terminal": True, "status": status,
+                "message": message or action.get("message", ""),
+                "observe": d.get("observe", ""), "review": d.get("review", ""),
+                "plan": d.get("plan", ""), "skill": d.get("skill", ""),
+                "action": action, "snapshot": snapshot}
+    if action.get("type") == "request_user_takeover":
+        return {"ok": True, "terminal": True, "status": "need_user",
+                "message": message or action.get("instruction", ""),
+                "observe": d.get("observe", ""), "review": d.get("review", ""),
+                "plan": d.get("plan", ""), "skill": d.get("skill", ""),
+                "action": action, "snapshot": snapshot}
+    try:
+        res = _exec_protocol_action(action)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "执行失败: %s" % e}
+    history.append({
+        "action": action.get("type"),
+        "params": {k: v for k, v in action.items() if k != "type"},
+        "result": res.get("message"),
+        "status": status,
+    })
+    return {"ok": True, "terminal": False, "status": status,
+            "message": message, "exec_result": res,
+            "observe": d.get("observe", ""), "review": d.get("review", ""),
+            "plan": d.get("plan", ""), "skill": d.get("skill", ""),
+            "action": action, "snapshot": snapshot}
+
+
+def _agent_full_worker(tid, goal):
+    """Run the protocol loop to completion in a background thread."""
+    task = _TASKS.get(tid)
+    if not task:
+        return
+    task["status"] = "running"
+    history = []
+    for _ in range(40):  # hard cap to avoid infinite loops
+        if task.get("_cancelled"):
+            task["status"] = "cancelled"
+            task["result"] = {"done": False, "reason": "用户取消"}
+            return
+        r = _agent_round(goal, history)
+        task["history"] = list(history)
+        task["result"] = {"last": r}
+        if not r.get("ok"):
+            task["status"] = "error"
+            task["result"] = {"done": False, "reason": r.get("error")}
+            return
+        if r.get("terminal"):
+            task["status"] = "done" if r.get("status") == "done" else \
+                ("need_user" if r.get("status") == "need_user" else "failed")
+            task["result"] = {"done": task["status"] == "done",
+                              "message": r.get("message"),
+                              "status": task["status"]}
+            return
+    task["status"] = "failed"
+    task["result"] = {"done": False, "reason": "协议循环超过40轮未收敛"}
+
+
 def _do_action(op, data):
+    if op == "agent":
+        # Protocol mode: one atomic action per round, reactive loop.
+        if not llm_configured():
+            return {"ok": False, "error": "LLM 未配置：在 .env 设置 "
+                    "LLM_BASE_URL/LLM_API_KEY/LLM_MODEL"}
+        goal = str(data.get("goal", "")).strip()
+        if not goal:
+            return {"ok": False, "error": "空目标"}
+        history = data.get("history") or []
+        if not isinstance(history, list):
+            history = []
+        return _agent_round(goal, history)
+    elif op == "agent_full":
+        # Run the protocol loop to completion in a background thread.
+        if not llm_configured():
+            return {"ok": False, "error": "LLM 未配置"}
+        goal = str(data.get("goal", "")).strip()
+        if not goal:
+            return {"ok": False, "error": "空目标"}
+        tid = uuid.uuid4().hex[:12]
+        task = {
+            "id": tid, "plan_text": "协议循环", "prompt": goal,
+            "steps": [], "status": "running", "result": None,
+            "history": [], "created": time.time(),
+        }
+        with _TASKS_LOCK:
+            _TASKS[tid] = task
+        threading.Thread(target=_agent_full_worker, args=(tid, goal),
+                         daemon=True).start()
+        return {"ok": True, "task": _public_task(task)}
     if op == "plan":
         if not llm_configured():
             return {"ok": False, "error": "LLM 未配置：在 .env 设置 "
