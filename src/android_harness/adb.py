@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import contextvars
 from pathlib import Path
 
 # --- adb binary discovery -------------------------------------------------
@@ -44,15 +45,33 @@ def _find_adb():
 
 
 ADB = _find_adb()
-SERIAL = os.environ.get("ANDROID_SERIAL")  # optional: target a specific device
+_DEFAULT_SERIAL = os.environ.get("ANDROID_SERIAL")  # optional default
+# Thread/task-scoped serial (contextvars). Allows the harness to target
+# different devices concurrently from different threads without a global
+# mutable `SERIAL` (which would race across tasks).
+_SERIAL_CTX: contextvars.ContextVar = contextvars.ContextVar(
+    "android_harness_serial", default=_DEFAULT_SERIAL)
 
 
-# --- low-level run --------------------------------------------------------
+def set_serial(serial: str | None):
+    """Target a specific device for the CURRENT thread/task only.
+
+    Use a context manager or set/reset around a block so it doesn't leak to
+    sibling tasks running in the same thread. Calls without an explicit serial
+    fall back to ANDROID_SERIAL (or adb's default device).
+    """
+    _SERIAL_CTX.set(serial)
+
+
+def _current_serial() -> str | None:
+    return _SERIAL_CTX.get()
+
 
 def _argv(*args):
     base = [ADB]
-    if SERIAL:
-        base += ["-s", SERIAL]
+    serial = _current_serial()
+    if serial:
+        base += ["-s", serial]
     return base + list(args)
 
 

@@ -45,6 +45,16 @@ app.include_router(profile.router)
 @app.on_event("startup")
 def _startup():
     db.init_db()
+    _start_scheduler()
+
+
+def _start_scheduler():
+    """Launch the routines scheduler in a background daemon thread."""
+    import threading
+    from .scheduler.routines_scheduler import scheduler_loop
+    t = threading.Thread(target=scheduler_loop, daemon=True,
+                         name="routines-scheduler")
+    t.start()
 
 
 @app.get("/health")

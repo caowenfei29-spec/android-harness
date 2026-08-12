@@ -13,7 +13,19 @@ from ..core.llm import LLMClient
 
 _dm = DeviceManager()
 _llm = LLMClient()
-_lock = threading.Lock()
+# Per-device locks (not a single global lock) so different devices can run
+# tasks concurrently. Map: serial -> threading.Lock.
+_DEVICE_LOCKS: dict[str, threading.Lock] = {}
+_lock_guard = threading.Lock()
+
+
+def _device_lock(serial: str) -> threading.Lock:
+    with _lock_guard:
+        lock = _DEVICE_LOCKS.get(serial)
+        if lock is None:
+            lock = threading.Lock()
+            _DEVICE_LOCKS[serial] = lock
+        return lock
 
 
 def start_task_background(task_id: str):
@@ -22,7 +34,14 @@ def start_task_background(task_id: str):
 
 
 def run_task(task_id: str, resume_message: str | None = None):
-    with _lock:  # MVP: global single-task lock
+    # resolve device serial by device_id first (needed to pick the lock)
+    task = db.get_task(task_id)
+    if not task:
+        return
+    dev = db.get_device(task["device_id"]) or {}
+    serial = dev.get("serial") or task["device_id"]
+
+    with _device_lock(serial):  # per-device: concurrent across devices
         task = db.get_task(task_id)
         if not task:
             return
@@ -33,10 +52,6 @@ def run_task(task_id: str, resume_message: str | None = None):
             if event.get("type") == "step":
                 db.add_step(task_id, event)
                 db.update_task(task_id, current_step=event.get("step", 0))
-
-        # resolve device serial by device_id
-        dev = db.get_device(task["device_id"]) or {}
-        serial = dev.get("serial") or task["device_id"]
 
         loop = AgentLoop(
             goal=task["user_goal"],

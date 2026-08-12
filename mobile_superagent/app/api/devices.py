@@ -2,6 +2,7 @@
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 from pathlib import Path
+from pydantic import BaseModel
 
 from .. import db
 from ..settings import settings
@@ -9,6 +10,11 @@ from ..core.device_manager import DeviceManager
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
 _dm = DeviceManager()
+
+
+class WifiConnectReq(BaseModel):
+    host: str
+    port: int = 5555
 
 
 @router.get("")
@@ -19,6 +25,11 @@ def list_devices():
 @router.post("/refresh")
 def refresh():
     return _dm.refresh()
+
+
+@router.post("/connect_wifi")
+def connect_wifi(req: WifiConnectReq):
+    return _dm.connect_wifi(req.host, req.port)
 
 
 @router.get("/{device_id}/screenshot")

@@ -26,6 +26,49 @@ from .router import route_skill
 from .progress import ProgressTracker
 from .safety import SafetyGuard
 from .perception import capture_state, state_to_prompt
+from .. import db
+
+# Skills whose only useful signal is on-screen rendered text (video feeds,
+# subtitles) that uiautomator can't see — OCR is expensive, so gate it.
+_OCR_SKILLS = {"FEED_SUMMARY", "SOCIAL", "SHOPPING", "BROWSER", "NONE"}
+
+# Built-in app name -> package alias table, injected so the model can launch
+# apps by friendly name without guessing package names.
+APP_ALIASES = {
+    "抖音": "com.ss.android.ugc.aweme",
+    "快手": "com.smile.gifmaker",
+    "微信": "com.tencent.mm",
+    "QQ": "com.tencent.mobileqq",
+    "哔哩哔哩": "tv.danmaku.bili",
+    "b站": "tv.danmaku.bili",
+    "淘宝": "com.taobao.taobao",
+    "京东": "com.jingdong.app.mall",
+    "小红书": "com.xingin.xhs",
+    "微博": "com.sina.weibo",
+    "支付宝": "com.eg.android.AlipayGphone",
+    "浏览器": "mark.via",
+    "via": "mark.via",
+    "chrome": "com.android.chrome",
+    "youtube": "com.google.android.youtube",
+    "应用商店": "com.oppo.market",
+    "电话": "com.android.dialer",
+    "相机": "com.oppo.camera",
+    "相册": "com.coloros.gallery3d",
+    "设置": "com.android.settings",
+    "邮件": "com.oppo.email",
+    "日历": "com.coloros.calendar",
+    "地图": "com.autonavi.minimap",
+    "美团": "com.sankuai.meituan",
+    "滴滴": "com.sdu.didi.psnger",
+    "钉钉": "com.alibaba.android.rimet",
+    "飞书": "com.ss.android.lark",
+    "今日头条": "com.ss.android.article.news",
+    "腾讯视频": "com.tencent.qqlive",
+    "爱奇艺": "com.qiyi.video",
+    "网易云音乐": "com.netease.cloudmusic",
+    "拼多多": "com.xunmeng.pinduoduo",
+    "闲鱼": "com.taobao.idlefish",
+}
 
 
 class AgentLoop:
@@ -49,6 +92,10 @@ class AgentLoop:
         self.safety = SafetyGuard()
         self.history: list[str] = []
         self.messages: list[dict] = []
+        # OCR is gated by skill: only feed-like skills need on-screen rendered
+        # text (video titles). APP_INSTALL etc. save the OCR cost per step.
+        self.ocr = self.skill in _OCR_SKILLS
+        self.profile = db.get_profile() or {}
 
     def _emit(self, event: dict):
         if self.on_step:
@@ -56,10 +103,16 @@ class AgentLoop:
 
     def run(self) -> dict[str, Any]:
         device = self.dm.ensure_online(self.serial)
-        state = capture_state(device, self.run_dir, step=0)
+        state = capture_state(device, self.run_dir, step=0, ocr=self.ocr)
 
         if self.resume_message:
             self.history.append(f"user_resume: {self.resume_message}")
+
+        # User profile & app aliases injected once into every prompt, so the
+        # model knows the user's preferred browser / messaging defaults and
+        # can launch apps by friendly name.
+        aliases = "\n".join(f"{k} = {v}" for k, v in APP_ALIASES.items())
+        profile_hint = self._profile_hint()
 
         stagnant_hits = 0
         for step in range(1, self.max_steps + 1):
@@ -69,6 +122,8 @@ class AgentLoop:
             user_prompt = (
                 f"用户目标：\n{self.goal}\n\n"
                 f"当前主技能：{self.skill}\n\n"
+                f"【应用别名表（launch_app 用包名）】\n{aliases}\n\n"
+                f"【用户偏好】\n{profile_hint}\n\n"
                 f"{state_to_prompt(state)}\n\n"
                 f"最近历史动作：\n"
                 + ("\n".join(self.history[-12:]) if self.history else "（无）")
@@ -159,11 +214,40 @@ class AgentLoop:
                         "reason": agent_out.user_message
                         if agent_out.status == "need_user" else None}
 
-            time.sleep(0.5)
-            state = capture_state(device, self.run_dir, step=step)
+            # settle the screen (lazy-loaded content / animations) before the
+            # next perception pass — only when an action may have changed the
+            # screen (skip for pure read/wait steps to save a dump).
+            if action.get("type") not in {"get_state", "wait"}:
+                try:
+                    device.wait_stable(timeout=3.0)
+                except Exception:  # noqa: BLE001
+                    time.sleep(0.5)
+            else:
+                time.sleep(0.5)
+            state = capture_state(device, self.run_dir, step=step,
+                                  ocr=self.ocr)
 
         return {"status": "failed",
                 "message": f"超过最大步数 {self.max_steps}"}
+
+    def _profile_hint(self) -> str:
+        """Render user-profile prefs into a compact hint for the model."""
+        p = self.profile
+        if not p:
+            return "（无额外偏好）"
+        lines = []
+        browser = p.get("default_browser")
+        if browser:
+            lines.append(f"默认浏览器：{browser}")
+        if p.get("messaging_paste_first"):
+            lines.append("消息发送偏好：先粘贴再发送（paste-first）")
+        lang = p.get("language")
+        if lang:
+            lines.append(f"语言：{lang}")
+        auto_pay = p.get("auto_pay")
+        if auto_pay is not None:
+            lines.append(f"自动支付：{'允许' if auto_pay else '禁止（支付一律人工接管）'}")
+        return "\n".join(lines) if lines else "（无额外偏好）"
 
 
 def json_dumps(obj) -> str:

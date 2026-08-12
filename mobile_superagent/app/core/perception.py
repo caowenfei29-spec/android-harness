@@ -11,7 +11,9 @@ Three senses:
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..settings import settings
 
@@ -27,24 +29,42 @@ class CaptureState:
     size: tuple | None = None
 
 
+def _tesseract_cmd() -> str:
+    """Resolve the tesseract binary cross-platform: env override > shutil.which
+    > the legacy Windows path (avoids hard-coding Windows in non-Windows CI)."""
+    if settings.tesseract_cmd:
+        return settings.tesseract_cmd
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    legacy = "C:/Program Files/Tesseract-OCR/tesseract.exe"
+    if Path(legacy).exists():
+        return legacy
+    return "tesseract"
+
+
 def _ocr_image(path: str) -> str:
     """OCR the screenshot with Tesseract (chi_sim+eng). Returns visible text."""
     try:
         os.environ.setdefault("TESSDATA_PREFIX", settings.tessdata_dir)
         import pytesseract
         from PIL import Image
-        pytesseract.pytesseract.tesseract_cmd = settings.tesseract_cmd
+        pytesseract.pytesseract.tesseract_cmd = _tesseract_cmd()
         return pytesseract.image_to_string(
             Image.open(path), lang="chi_sim+eng").strip()
     except Exception:  # noqa: BLE001
         return ""
 
 
-def capture_state(bridge, run_dir, step: int) -> CaptureState:
+def capture_state(bridge, run_dir, step: int, ocr: bool = True) -> CaptureState:
     """Capture current device state via the given bridge (the ADB adapter).
 
     bridge must expose: current_app(), screen_size(), dump_nodes(),
     screenshot(path) -> path.
+
+    `ocr` gates the expensive screenshot OCR pass — turn it OFF for skills that
+    don't need on-screen text (e.g. APP_INSTALL), ON for FEED_SUMMARY where the
+    rendered video title only exists in pixels.
     """
     st = CaptureState()
     try:
@@ -80,7 +100,7 @@ def capture_state(bridge, run_dir, step: int) -> CaptureState:
         st.screenshot_path = path or ""
     except Exception:  # noqa: BLE001
         st.screenshot_path = ""
-    if st.screenshot_path:
+    if st.screenshot_path and ocr:
         st.screen_ocr = _ocr_image(st.screenshot_path)
     return st
 

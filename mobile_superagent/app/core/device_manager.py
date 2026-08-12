@@ -42,11 +42,23 @@ class DeviceManager:
                 props["android_version"] = out2.strip()
             except Exception:  # noqa: BLE001
                 pass
+            # WiFi adb devices have a "ip:port" serial; USB serials do not.
+            connect_type = "wifi" if ":" in serial else "usb"
             rid = db.upsert_device(serial, name=props.get("model", serial),
-                                   connect_type="usb", props=props)
+                                   connect_type=connect_type, props=props)
             rec = db.get_device(rid)
             records.append(rec)
         return records
+
+    def connect_wifi(self, host: str, port: int = 5555) -> dict:
+        """`adb connect ip:port` to attach a WiFi device, then refresh."""
+        target = f"{host}:{port}"
+        try:
+            out = ADB.run("connect", target, timeout=15, check=False).stdout
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)}
+        self.refresh()
+        return {"ok": True, "output": out.strip()}
 
     def get(self, serial: str) -> AndroidDevice:
         dev = self.clients.get(serial)

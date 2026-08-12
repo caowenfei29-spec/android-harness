@@ -4,6 +4,7 @@ Credentials live in .env (gitignored). We never print/read API keys in
 cleartext beyond loading them for the LLM client. Loaded once at import.
 """
 from pathlib import Path
+import shutil
 from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     db_url: str = f"sqlite:///{ROOT / 'storage' / 'app.db'}"
     storage_dir: str = str(ROOT / "storage" / "runs")
     tessdata_dir: str = str(ROOT / "tessdata")
-    tesseract_cmd: str = "C:/Program Files/Tesseract-OCR/tesseract.exe"
+    tesseract_cmd: str = ""
     default_timezone: str = "Asia/Shanghai"
     host: str = "127.0.0.1"
     port: int = 8000

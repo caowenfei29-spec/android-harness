@@ -7,6 +7,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core import router, schema, safety  # noqa: E402
+from app.core import agent_loop  # noqa: E402
 
 
 def test_extract_json_plain():
@@ -86,3 +87,37 @@ def test_safety_allows_auto_pay_when_enabled():
     block = g.check("买东西", {"type": "tap", "x": 1, "y": 2},
                     page_text="立即支付")
     assert block is None
+
+
+# --- serial isolation (adb.set_serial uses contextvars, not a global) -------
+
+def test_adb_serial_is_contextvar_not_global():
+    import threading
+    from android_harness import adb
+    assert not hasattr(adb, "SERIAL"), "global SERIAL must be removed"
+
+    # Two concurrent threads must not leak serial to each other.
+    seen = {}
+
+    def worker(name, serial):
+        adb.set_serial(serial)
+        time.sleep(0.05)  # let the other thread run
+        seen[name] = adb._current_serial()
+
+    import time
+    a = threading.Thread(target=worker, args=("a", "dev_A:5555"))
+    b = threading.Thread(target=worker, args=("b", "dev_B:5555"))
+    a.start(); b.start(); a.join(); b.join()
+    assert seen["a"] == "dev_A:5555"
+    assert seen["b"] == "dev_B:5555"
+
+
+def test_agent_ocr_gated_by_skill():
+    # feed-like skills use OCR; install-type skills don't.
+    assert "FEED_SUMMARY" in agent_loop._OCR_SKILLS
+    assert "APP_INSTALL" not in agent_loop._OCR_SKILLS
+
+
+def test_app_aliases_cover_core_apps():
+    assert agent_loop.APP_ALIASES["抖音"] == "com.ss.android.ugc.aweme"
+    assert agent_loop.APP_ALIASES["微信"] == "com.tencent.mm"

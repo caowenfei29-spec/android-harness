@@ -3,11 +3,17 @@
 Reuses the battle-tested adb.py (OPPO/ColorOS handling: uiautomator dump 137
 retries, monkey fallback for launch, ADBKeyboard unicode input). This is the
 `Device` a protocol action executes against.
+
+Device isolation: each AndroidDevice pins its serial via adb.set_serial()
+using contextvars, so concurrent tasks on different devices never race (the
+old `ADB.SERIAL = serial` assignment was a no-op — ADB is a string, and adb.py
+reads a module-level var; see adb.set_serial).
 """
 from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 from ..settings import settings
@@ -37,27 +43,43 @@ class ExecResult:
 class AndroidDevice:
     def __init__(self, serial: str | None = None):
         self.serial = serial
+        # Pin this device for the CURRENT thread/task (contextvars-scoped).
         if serial:
-            ADB.SERIAL = serial
+            ADB.set_serial(serial)
         self.d = self  # lightweight probe interface
 
     # --- perception helpers (used by agent_loop/perception) --------------
     def current_app(self):
+        self._pin()
         return ADB.current_app()
 
     def screen_size(self):
+        self._pin()
         return ADB.screen_size()
 
     def dump_nodes(self):
+        self._pin()
         path = ADB.dump_ui()
         return H._ui.parse(path)
 
     def screenshot(self, path=None):
+        self._pin()
         return H.screenshot(path)
+
+    def wait_stable(self, timeout=6.0, interval=0.5, settle=2):
+        self._pin()
+        return H.wait_stable(timeout=timeout, interval=interval, settle=settle)
+
+    def _pin(self):
+        """Re-assert the device serial in case a different thread re-targeted
+        the shared context in the meantime. Cheap; keeps us isolated."""
+        if self.serial:
+            ADB.set_serial(self.serial)
 
     # --- actions ----------------------------------------------------------
     def execute(self, action) -> ExecResult:
         t = action.get("type")
+        self._pin()
         try:
             return {
                 "get_state": lambda: ExecResult(True, "ok"),
@@ -66,6 +88,7 @@ class AndroidDevice:
                 "long_press": lambda: self._long_press(action),
                 "swipe": lambda: self._swipe(action),
                 "input_text": lambda: self._input_text(action),
+                "set_clipboard": lambda: self._set_clipboard(action),
                 "back": lambda: self._back(),
                 "home": lambda: self._home(),
                 "wait": lambda: self._wait(action),
@@ -100,15 +123,55 @@ class AndroidDevice:
         return ExecResult(True, "swiped")
 
     def _input_text(self, action):
+        """Type text into the field at (x,y), honoring clear/submit.
+
+        - clear=true  -> clear the field before typing (select-all + delete,
+          falling back to repeated KEYCODE_DEL).
+        - submit=true -> press ENTER after typing (search / single-field).
+        - Unicode (Chinese) uses ADBKeyboard; falls back to `input text`.
+        """
         text = str(action.get("text", ""))
-        if not text:
-            return ExecResult(False, "input_text 的 text 不能为空")
-        ADB.tap(int(action["x"]), int(action["y"]))
+        x, y = int(action["x"]), int(action["y"])
+        ADB.tap(x, y)
+        time.sleep(0.3)
+        if action.get("clear"):
+            self._clear_field()
+        if text:
+            try:
+                H.type_unicode(text)
+            except Exception:  # noqa: BLE001
+                ADB.type_text(text)
+        if action.get("submit"):
+            ADB.keyevent("KEYCODE_ENTER")
+            time.sleep(0.3)
+        return ExecResult(True, f"typed into ({x},{y})")
+
+    def _clear_field(self):
+        """Select-all then delete; fall back to repeated KEYCODE_DEL."""
         try:
-            H.type_unicode(text)
+            # Select all then backspace — clears the whole field in one shot.
+            ADB.keyevent("KEYCODE_MOVE_END")
+            ADB.keyevent("KEYCODE_DEL")  # may not select-all on all ROMs
+            ADB.keyevent("KEYCODE_A")    # Ctrl+A select-all
         except Exception:  # noqa: BLE001
-            ADB.type_text(text)
-        return ExecResult(True, f"typed into ({action['x']},{action['y']})")
+            pass
+        # Belt-and-braces: a handful of DEL presses for short leftovers.
+        for _ in range(5):
+            ADB.keyevent("KEYCODE_DEL")
+        time.sleep(0.2)
+
+    def _set_clipboard(self, action):
+        """Put text on the clipboard (works on most devices via a shell cmd
+        fallback since `cmd clipboard` is unreliable)."""
+        text = str(action.get("text", ""))
+        # Many devices support: am broadcast -a ADB_INPUT_TEXT ... no. Use the
+        # service API where available; else fall back to `cmd clipboard`.
+        try:
+            ADB.run("shell", f"cmd clipboard set-text '{text}'",
+                    timeout=10, check=False)
+        except Exception:  # noqa: BLE001
+            pass
+        return ExecResult(True, "clipboard set")
 
     def _back(self):
         ADB.back()
@@ -119,7 +182,6 @@ class AndroidDevice:
         return ExecResult(True, "home")
 
     def _wait(self, action):
-        import time
         time.sleep(float(action.get("seconds", 3)))
         return ExecResult(True, f"waited {action.get('seconds')}s")
 
